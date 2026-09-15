@@ -1,0 +1,475 @@
+import * as XLSX from 'xlsx';
+import { UploadedFileRecord, UploadKind } from '../types';
+import { stpRoleMappingConfig } from './stpMappingService';
+
+export interface ParsedFileOptions {
+  fileName: string;
+  kind: UploadKind;
+}
+
+function normalizeHeader(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '').trim();
+}
+
+function normalizeMeasure(name: string): string {
+  return normalizeHeader(name).replace(/(actual|forecast|fcst)$/, '');
+}
+
+const reverseStpRoleLookup = new Map<string, string>();
+for (const [role, measures] of Object.entries(stpRoleMappingConfig)) {
+  for (const measure of measures) {
+    reverseStpRoleLookup.set(normalizeMeasure(measure), role);
+  }
+}
+
+const requiredHeaderAliases = new Set([
+  'requiredhours', 'requirehours', 'required', 'reqhours', 'reqhrs', 'reqhr', 'hoursrequired', 'hourrequired', 'neededhours',
+  'requiredhrs', 'requiredhour', 'hoursreq', 'hoursneeded', 'reqdhrs', 'stprequiredhours', 'stpreqhours',
+  'reqdhours', 'hourreq', 'hoursreqd', 'reqdhr', 'reqdhours', 'requiredperiodhours', 'labourrequiredhours',
+  'tothoursrequired', 'hoursrequiredstp'
+]);
+
+const roleHeaderAliases = new Set([
+  'workrole', 'role', 'resourcerole', 'resource', 'jobrole', 'resourcetype', 'workarearole', 'functionrole',
+  'resourceworkrole', 'workarearesource', 'workrolecode', 'stprole', 'resourcecategory', 'rolecategory'
+]);
+
+const volumeHeaderAliases = new Set([
+  'volume', 'm2', 'm3', 'actualvolume', 'actualm3', 'stpvolume', 'plannedvolume', 'volumem2', 'volumem3',
+  'totalvolume', 'plannedm2', 'plannedm3', 'stpm2', 'stpm3', 'actualm2', 'inboundvolume', 'outboundvolume',
+  'inboundm2', 'outboundm2', 'inboundm3', 'outboundm3'
+]);
+
+const roleTranslationMap = new Map<string, string>([
+  ['banding', 'Banding'],
+  ['bayclearing', 'Bayclearing'],
+  ['bayclearm', 'Bayclearing'],
+  ['bay', 'Bayclearing'],
+  ['booking', 'Booking Office'],
+  ['bookingoffice', 'Booking Office'],
+  ['picking', 'Picking'],
+  ['pick', 'Pick'],
+  ['picker', 'Picking'],
+  ['pickinginbound', 'Picking'],
+  ['replens', 'Replens'],
+  ['replenishment', 'Replens'],
+  ['replen', 'Replens'],
+  ['dcloading', 'DC Loading'],
+  ['loading', 'DC Loading'],
+  ['dctipping', 'DC Tipping'],
+  ['transitbay', 'Transit Bay'],
+  ['transitbayclearing', 'Transit Bay'],
+  ['transitload', 'Transit Load'],
+  ['transittip', 'Transit Tip'],
+  ['transittipping', 'Transit Tipping'],
+  ['dcbayclear', 'DC Bay Clear'],
+  ['transitcycle', 'Transit Cycle'],
+  ['transittransfer', 'Transit Transfer'],
+  ['tramplock', 'Tram Plock'],
+  ['mat', 'Mats'],
+  ['mats', 'Mats'],
+  ['mct', 'MCT'],
+  ['cbpalletless', 'CB Palletless'],
+  ['cycles', 'Cycles'],
+  ['gatekeeper', 'Gatekeeper'],
+  ['coworker', 'Co-Worker'],
+  ['recovery', 'Recovery'],
+  ['shunting', 'Shunting']
+]);
+
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = '';
+  let insideQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"') {
+      if (insideQuotes && next === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (char === ',' && !insideQuotes) {
+      cells.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  cells.push(current);
+  return cells.map(cell => cell.trim());
+}
+
+function isStpWorkbookSheet(sheet: XLSX.WorkSheet): boolean {
+  const firstRow = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: '', raw: false, header: 1 }) as Array<string[]>;
+  const allRows = firstRow.flat().map(value => String(value ?? '').trim());
+  return allRows.some(value => value === 'DC_Summary_Measures' || value === 'DC Summary Measures');
+}
+
+function toNumber(value: unknown): number {
+  const valueString = String(value ?? '').replace(/[^0-9.-]/g, '');
+  const raw = Number(valueString);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function normalizeRoleName(role: string): string {
+  const trimmed = String(role ?? '').trim();
+  if (!trimmed) return '';
+
+  const normalized = trimmed.toLowerCase().replace(/[^a-z]+/g, '');
+  if (!normalized) return '';
+
+  return roleTranslationMap.get(normalized) ?? trimmed;
+}
+
+function looksLikeRoleHeader(name: string): boolean {
+  return roleHeaderAliases.has(name)
+    || /role/.test(name)
+    || /resource/.test(name)
+    || /work/.test(name)
+    || /function/.test(name)
+    || /resourcetype/.test(name);
+}
+
+function looksLikeVolumeHeader(name: string): boolean {
+  return volumeHeaderAliases.has(name)
+    || /volume/.test(name)
+    || /m2/.test(name)
+    || /m3/.test(name)
+    || /inbound/.test(name)
+    || /outbound/.test(name)
+    || /demand/.test(name)
+    || /activity/.test(name);
+}
+
+function looksLikeRequiredHoursHeader(name: string): boolean {
+  return requiredHeaderAliases.has(name)
+    || /required.*hours/.test(name)
+    || /req.*hours/.test(name)
+    || /hours.*req/.test(name)
+    || /hours.*required/.test(name)
+    || /req.*hr/.test(name)
+    || /needed.*hours/.test(name)
+    || /hours.*needed/.test(name);
+}
+
+function applyField(record: Record<string, string | number>, name: string, cleaned: string) {
+  if (name === 'shiftdate' || name === 'date') {
+    record.date = cleaned;
+  } else if (name === 'shiftstarttime' || name === 'shiftendtime') {
+    record[name] = cleaned;
+  } else if (name === 'scheduledhours' || name === 'schedulehours' || name === 'plannedhours' || name === 'rosteredhours') {
+    record.scheduledHours = toNumber(cleaned);
+    record.hours = toNumber(cleaned);
+  } else if (looksLikeRoleHeader(name)) {
+    const translated = normalizeRoleName(cleaned);
+    if (translated) {
+      record.role = translated;
+    }
+  } else if (name === 'absencedate') {
+    record.date = cleaned;
+  } else if (name === 'absencetype' || name === 'absencecategory' || name === 'type') {
+    record.absenceType = cleaned;
+  } else if (name === 'absencehours' || name === 'plannedabsencehours') {
+    record.absenceHours = toNumber(cleaned);
+  } else if (looksLikeVolumeHeader(name)) {
+    const parsed = toNumber(cleaned);
+    record.volume = parsed;
+    record.m3 = parsed;
+    record.m2 = parsed;
+    record.actualVolume = parsed;
+  } else if (looksLikeRequiredHoursHeader(name)) {
+    record.requiredHours = toNumber(cleaned);
+  } else if (name === 'paidhours' || name === 'paidhours' || name === 'workedhours') {
+    record.paidHours = toNumber(cleaned);
+  } else {
+    record[name] = cleaned;
+  }
+}
+
+function normalizeRecordForKind(record: Record<string, string | number>, kind: UploadKind): Record<string, string | number> {
+  if (kind === 'schedule') {
+    const scheduledHours = toNumber(record.scheduledHours ?? record.hours ?? 0);
+    const role = String(record.role ?? record.workrole ?? 'Schedule Role');
+    const shiftDate = String(record.date ?? record.shiftdate ?? 'Week 1');
+    record.role = role;
+    record.scheduledHours = scheduledHours;
+    record.date = shiftDate;
+    record.hours = scheduledHours;
+  }
+
+  if (kind === 'absence') {
+    const absenceHours = toNumber(record.absenceHours ?? record.absencehours ?? record.hours ?? 0);
+    const absenceType = String(record.absenceType ?? record.absencetype ?? record.type ?? 'Absence');
+    const absenceDate = String(record.date ?? record.absencedate ?? 'N/A');
+    record.absenceType = absenceType;
+    record.absenceHours = absenceHours;
+    record.date = absenceDate;
+  }
+
+  if (kind === 'stp') {
+    record.source = record.source ?? 'STP Tool';
+    const volume = toNumber(record.volume ?? record.m3 ?? record.m2 ?? record.actualvolume ?? record.actualm3 ?? record.stpvolume ?? 0);
+    record.volume = volume;
+    record.m3 = volume;
+    record.m2 = volume;
+
+    const role = normalizeRoleName(String(record.role ?? record.workrole ?? ''));
+    if (role) {
+      record.role = role;
+    } else {
+      delete record.role;
+    }
+
+    if (toNumber(record.requiredHours ?? 0) > 0) {
+      record.requiredHours = toNumber(record.requiredHours ?? 0);
+    } else {
+      delete record.requiredHours;
+    }
+  }
+
+  if (kind === 'actual-volume') {
+    record.period = record.period ?? 'Period';
+    record.actualVolume = toNumber(record.actualvolume ?? record.volume ?? record.m2 ?? 0);
+    record.volume = record.actualVolume;
+  }
+
+  if (kind === 'paid-hours') {
+    record.paidHours = toNumber(record.paidHours ?? record.paidhours ?? record.hours ?? 0);
+    record.hours = record.paidHours;
+  }
+
+  return record;
+}
+
+export function normalizeRows(rawLines: string[], kind: UploadKind): Array<Record<string, string | number>> {
+  const rows = rawLines
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const header = parseCsvLine(rows[0]).map(cell => normalizeHeader(cell));
+  const records: Array<Record<string, string | number>> = [];
+
+  for (let index = 1; index < rows.length; index += 1) {
+    const cells = parseCsvLine(rows[index]);
+    const record: Record<string, string | number> = {};
+
+    header.forEach((name, columnIndex) => {
+      const value = cells[columnIndex] ?? '';
+      const cleaned = value.replace(/"/g, '').trim();
+      applyField(record, name, cleaned);
+    });
+
+    normalizeRecordForKind(record, kind);
+
+    if (!record.role || String(record.role).trim() === '') {
+      continue;
+    }
+
+    if (Object.keys(record).length > 0) {
+      records.push(record);
+    }
+  }
+
+  return records;
+}
+
+function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadKind): Array<Record<string, string | number>> {
+  const records: Array<Record<string, string | number>> = [];
+
+  if (kind === 'stp') {
+    const forecastByWeek = new Map<string, string>();
+    for (const row of rows) {
+      const measure = String(row.DC_Summary_Measures ?? row.dcsummarymeasures ?? '').trim();
+      if (normalizeHeader(measure) !== 'forecastflag') continue;
+      for (const [key, value] of Object.entries(row)) {
+        if (/^20\d{4}$/.test(key)) forecastByWeek.set(key, String(value ?? '').trim());
+      }
+    }
+
+    for (const row of rows) {
+      const measure = String(row.DC_Summary_Measures ?? row.dcsummarymeasures ?? '').trim();
+      const roleFromMeasure = reverseStpRoleLookup.get(normalizeMeasure(measure));
+      const isTotalHandlingQueueCorrected = normalizeMeasure(measure) === normalizeMeasure('Total Handling (Queue Corrected)');
+      for (const [weekCode, value] of Object.entries(row)) {
+        if (!/^20\d{4}$/.test(weekCode)) continue;
+        const volume = toNumber(value);
+        if (volume <= 0) continue;
+        const forecastFlag = forecastByWeek.get(weekCode) ?? '';
+        records.push({ role: isTotalHandlingQueueCorrected ? '__TOTAL_HANDLING_QUEUE_CORRECTED__' : roleFromMeasure ?? `No mapping: ${measure}`, measure, weekCode, forecastFlag, volume, m3: volume, m2: volume, actualVolume: volume });
+        if (isTotalHandlingQueueCorrected) {
+          const additionalTasks = [
+            ['Bayclearing', 'Additional Bay Clear Queue Corrected', 0.37],
+            ['Replens', 'Additional Replenishment Queue Corrected', 0.30],
+            ['Cycles', 'Additional Cycles Queue Corrected', 0.30]
+          ] as const;
+          additionalTasks.forEach(([role, additionalMeasure, share]) => {
+            const additionalVolume = volume * share;
+            records.push({ role, measure: additionalMeasure, weekCode, forecastFlag, volume: additionalVolume, m3: additionalVolume, m2: additionalVolume, actualVolume: additionalVolume });
+          });
+        }
+      }
+    }
+
+    return records;
+  }
+
+  for (const row of rows) {
+    const record: Record<string, string | number> = {};
+    for (const [key, value] of Object.entries(row)) {
+      const normalizedKey = normalizeHeader(key);
+      const cleaned = String(value ?? '').replace(/"/g, '').trim();
+      applyField(record, normalizedKey, cleaned);
+    }
+
+    if (kind === 'stp') {
+      const measure = String(
+        record.dcsummarymeasures ??
+        record.dcsummarymeasures ??
+        record['DC_Summary_Measures'] ??
+        ''
+      );
+      const roleFromMeasure = reverseStpRoleLookup.get(normalizeHeader(measure));
+      if (!roleFromMeasure) {
+        continue;
+      }
+
+      const dateColumns = Object.entries(record)
+        .filter(([key]) => /^\d{6}$/.test(key))
+        .map(([, value]) => toNumber(value));
+
+      const rowVolume = dateColumns.reduce((acc, value) => acc + value, 0);
+      if (rowVolume <= 0) {
+        continue;
+      }
+
+      record.role = roleFromMeasure;
+      record.volume = rowVolume;
+      record.m3 = rowVolume;
+      record.m2 = rowVolume;
+      record.actualVolume = rowVolume;
+    }
+
+    normalizeRecordForKind(record, kind);
+
+    if (kind === 'stp') {
+      const rowRole = normalizeRoleName(String(record.role ?? ''));
+      const rowVolume = toNumber(record.volume ?? record.m2 ?? record.m3 ?? record.actualVolume ?? 0);
+      if (!rowRole || rowRole === 'STP Role' || rowVolume <= 0) {
+        continue;
+      }
+      record.role = rowRole;
+    }
+
+    if (!record.role || String(record.role).trim() === '') {
+      continue;
+    }
+
+    if (Object.keys(record).length > 0) {
+      records.push(record);
+    }
+  }
+
+  return records;
+}
+
+export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast'): Promise<UploadedFileRecord> {
+  const fileName = file.name || 'upload.csv';
+  const extension = file.name.split('.').pop()?.toLowerCase();
+
+  if (extension === 'xlsx' || extension === 'xls') {
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+      if (!workbook.SheetNames.length) {
+        throw new Error('No worksheet found in workbook.');
+      }
+
+      const records: Array<Record<string, string | number>> = [];
+      const sheets = workbook.SheetNames.filter(sheetName => {
+        const sheet = workbook.Sheets[sheetName];
+        return kind !== 'stp' || isStpWorkbookSheet(sheet);
+      });
+
+      for (const sheetName of sheets) {
+        const sheet = workbook.Sheets[sheetName];
+        const objectRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
+        records.push(...normalizeObjectRows(objectRows, kind));
+      }
+
+      if (!records.length) {
+        return {
+          fileName,
+          kind,
+          importedAt: new Date().toISOString(),
+          records: [],
+          status: 'error',
+          message: 'No records could be parsed from the workbook.'
+        };
+      }
+
+      return {
+        fileName,
+        kind,
+        importedAt: new Date().toISOString(),
+        records,
+        status: 'parsed',
+        message: `Parsed ${records.length} record${records.length === 1 ? '' : 's'} from ${fileName}.`
+      };
+    } catch (error) {
+      return {
+        fileName,
+        kind,
+        importedAt: new Date().toISOString(),
+        records: [],
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Failed to read workbook.'
+      };
+    }
+  }
+
+  const content = await file.text();
+  const rawLines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+
+  if (rawLines.length === 0) {
+    return {
+      fileName,
+      kind,
+      importedAt: new Date().toISOString(),
+      records: [],
+      status: 'error',
+      message: 'No readable rows found in file.'
+    };
+  }
+
+  const records = normalizeRows(rawLines, kind);
+
+  if (!records.length) {
+    return {
+      fileName,
+      kind,
+      importedAt: new Date().toISOString(),
+      records: [],
+      status: 'error',
+      message: 'No records could be parsed from the file.'
+    };
+  }
+
+  return {
+    fileName,
+    kind,
+    importedAt: new Date().toISOString(),
+    records,
+    status: 'parsed',
+    message: `Parsed ${records.length} record${records.length === 1 ? '' : 's'} from ${fileName}.`
+  };
+}
