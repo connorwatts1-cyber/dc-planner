@@ -102,7 +102,7 @@ function AppShell() {
 export default function App() {
   return (
     <PlannerProvider>
-      <BrowserRouter>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <AppShell />
       </BrowserRouter>
     </PlannerProvider>
