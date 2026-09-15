@@ -42,7 +42,7 @@ export default function FollowUpPage() {
       <PageHeader title="Follow Up" subtitle={`Weekly Review — ${selectedLabel}`} />
       <Grid container spacing={2} className="card-grid">
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Required Hours" value={Math.round(followUp.requiredHours)} /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Paid Hours" value={Math.round(followUp.paidHours)} /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><KPI title="Paid Hours" value={Math.round(followUp.scheduledHours)} /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Variance" value={Math.round(followUp.variance)} /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(followUp.capability * 10) / 10}%`} /></Grid>
       </Grid>

@@ -106,7 +106,7 @@ function parseCsvLine(line: string): string[] {
 }
 
 function isStpWorkbookSheet(sheet: XLSX.WorkSheet): boolean {
-  const firstRow = XLSX.utils.sheet_to_json<Record<string, string | number>>(sheet, { defval: '', raw: false, header: 1 }) as Array<string[]>;
+  const firstRow = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false, header: 1 }) as unknown as Array<string[]>;
   const allRows = firstRow.flat().map(value => String(value ?? '').trim());
   return allRows.some(value => value === 'DC_Summary_Measures' || value === 'DC Summary Measures');
 }
@@ -331,44 +331,7 @@ function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadK
       applyField(record, normalizedKey, cleaned);
     }
 
-    if (kind === 'stp') {
-      const measure = String(
-        record.dcsummarymeasures ??
-        record.dcsummarymeasures ??
-        record['DC_Summary_Measures'] ??
-        ''
-      );
-      const roleFromMeasure = reverseStpRoleLookup.get(normalizeHeader(measure));
-      if (!roleFromMeasure) {
-        continue;
-      }
-
-      const dateColumns = Object.entries(record)
-        .filter(([key]) => /^\d{6}$/.test(key))
-        .map(([, value]) => toNumber(value));
-
-      const rowVolume = dateColumns.reduce((acc, value) => acc + value, 0);
-      if (rowVolume <= 0) {
-        continue;
-      }
-
-      record.role = roleFromMeasure;
-      record.volume = rowVolume;
-      record.m3 = rowVolume;
-      record.m2 = rowVolume;
-      record.actualVolume = rowVolume;
-    }
-
     normalizeRecordForKind(record, kind);
-
-    if (kind === 'stp') {
-      const rowRole = normalizeRoleName(String(record.role ?? ''));
-      const rowVolume = toNumber(record.volume ?? record.m2 ?? record.m3 ?? record.actualVolume ?? 0);
-      if (!rowRole || rowRole === 'STP Role' || rowVolume <= 0) {
-        continue;
-      }
-      record.role = rowRole;
-    }
 
     if (!record.role || String(record.role).trim() === '') {
       continue;

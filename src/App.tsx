@@ -60,7 +60,7 @@ function AppShell() {
             <Typography variant="caption" sx={{ color: '#b9c9e8', display: 'block', mb: 1, fontWeight: 700 }}>ROLE SCOPE</Typography>
             <Box sx={{ display: 'grid', gap: 0.75 }}>
               {(['ops', 'non-ops', 'both'] as RoleScope[]).map(scope => (
-                <ButtonBase key={scope} selected={roleScope === scope} onClick={() => setRoleScope(scope)} sx={{ color: '#eefbf5', justifyContent: 'flex-start', px: 1, py: 0.75, borderRadius: 1, textTransform: 'capitalize', bgcolor: roleScope === scope ? '#254598' : 'transparent', '&:hover': { bgcolor: '#203b77' } }}>
+                <ButtonBase key={scope} onClick={() => setRoleScope(scope)} sx={{ color: '#eefbf5', justifyContent: 'flex-start', px: 1, py: 0.75, borderRadius: 1, textTransform: 'capitalize', bgcolor: roleScope === scope ? '#254598' : 'transparent', '&:hover': { bgcolor: '#203b77' } }}>
                   <Typography variant="body2">{scope === 'non-ops' ? 'Non-Ops' : scope === 'ops' ? 'Ops' : 'Ops + Non-Ops'}</Typography>
                 </ButtonBase>
               ))}
