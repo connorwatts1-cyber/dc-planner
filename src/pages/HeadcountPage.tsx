@@ -74,6 +74,14 @@ export default function HeadcountPage() {
     };
   });
   const chartRows = rows.map(row => ({ month: row.month.slice(0, 3), volume: row.totalHandlingVolume, fte: row.totalFteNeed, plusTwentyFte: Math.round(row.totalFteNeed * 1.2) }));
+  const workforceRows = rows.map(row => {
+    const assumptions = resourceMapping.monthValues?.[row.month] ?? resourceMapping;
+    const startingFte = assumptions.fte ?? resourceMapping.fte;
+    const leavers = assumptions.leavers ?? resourceMapping.leavers;
+    const endingFte = Math.max(startingFte - leavers, 0);
+    const recruitmentNeeded = Math.max(row.totalFteNeed - endingFte, 0);
+    return { month: row.month, startingFte, leavers, endingFte, requiredFte: row.totalFteNeed, recruitmentNeeded, surplus: Math.max(endingFte - row.totalFteNeed, 0) };
+  });
 
   return (
     <Box>
@@ -110,6 +118,24 @@ export default function HeadcountPage() {
                 <TableCell>{formatFte(row.fteHolidays)}</TableCell>
                 <TableCell sx={{ fontWeight: 800 }}>{formatFte(row.totalFteNeed)}</TableCell>
                 <TableCell sx={{ fontWeight: 800, color: 'success.main' }}>{formatFte(row.totalFteNeed * 1.2)}</TableCell>
+              </TableRow>)}</TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+        <Paper className="table-wrap" sx={{ overflowX: 'auto' }}>
+          <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>Recruitment and leaver movement</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Ending FTE is the monthly Settings baseline less planned leavers. Recruitment shows the additional FTE needed to cover the MTP requirement.</Typography>
+          <TableContainer>
+            <Table size="small" sx={{ minWidth: 760 }}>
+              <TableHead><TableRow>{['Month', 'Starting FTE', 'Leavers', 'Ending FTE', 'Required FTE', 'Recruitment needed', 'Surplus'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+              <TableBody>{workforceRows.map(row => <TableRow key={row.month} hover>
+                <TableCell sx={{ fontWeight: 700 }}>{row.month}</TableCell>
+                <TableCell>{formatFte(row.startingFte)}</TableCell>
+                <TableCell>{row.leavers.toFixed(1)}</TableCell>
+                <TableCell>{formatFte(row.endingFte)}</TableCell>
+                <TableCell>{formatFte(row.requiredFte)}</TableCell>
+                <TableCell sx={{ color: row.recruitmentNeeded > 0 ? 'error.main' : 'success.main', fontWeight: 800 }}>{formatFte(row.recruitmentNeeded)}</TableCell>
+                <TableCell sx={{ color: row.surplus > 0 ? 'success.main' : 'text.primary', fontWeight: 800 }}>{formatFte(row.surplus)}</TableCell>
               </TableRow>)}</TableBody>
             </Table>
           </TableContainer>

@@ -171,12 +171,12 @@ function statusFromCapability(value: number): 'Green' | 'Amber' | 'Red' | 'Blue'
 
 function recommendationFromCapability(value: number): string {
   if (value < 90) {
-    return 'Call on cross-functional support; pull forward MHE and mandatory training; multiskill coworkers; offer unpaid leave or move holidays forward.';
+    return '+ scenario: call on other functions; offer overtime; extend weekend/site hours; postpone classroom training; deploy leaders and office staff on trucks.';
   }
   if (value > 110) {
-    return 'Call on other functions; offer overtime; extend weekend/site hours; postpone classroom training; deploy leaders and office staff on trucks.';
+    return '- scenario: freeze recruitment; use borrowed resource and multiskilling; pull forward training; offer unpaid leave or move holidays forward.';
   }
-  return 'Maintain planned rota; complete mandatory training and MyLearning; continue multiskilling and monitor daily workload.';
+  return '0% scenario: maintain the planned rota; complete mandatory training and MyLearning; continue multiskilling and monitor workload.';
 }
 
 function weekScale(selectedWeekIndex: PlanningWeekSelection): number {
@@ -293,16 +293,11 @@ export function buildPlanningSnapshot(files: UploadedFileRecord[], roles: Role[]
   const stpDerivedHours = stpDemandPlan.roleDemandRows.reduce((acc, row) => acc + row.requiredHours, 0);
   const volume = sumField(files, 'stp', ['volume', 'm2', 'm3', 'actualVolume']);
 
-  const lowBoundary = Math.max(scheduledHours * 0.92, scheduledHours > 0 ? scheduledHours * 0.90 : 0);
-  const highBoundary = scheduledHours * 1.08;
-
-  const rawRequiredHours = scheduledHours > 0
+  const rawRequiredHours = stpDerivedHours > 0
     ? stpDerivedHours + plannedAbsenceHours * 0.15
-    : Math.max(stpDerivedHours, 0);
+    : scheduledHours > 0 ? scheduledHours : 0;
 
-  const requiredHours = (scheduledHours > 0
-    ? clamp(rawRequiredHours, lowBoundary, highBoundary)
-    : Math.max(rawRequiredHours, 0)) * weekScale(selectedWeekIndex);
+  const requiredHours = Math.max(rawRequiredHours, 0) * weekScale(selectedWeekIndex);
 
   const capability = (scheduledHours / Math.max(requiredHours, 1)) * 100;
   const variance = scheduledHours - requiredHours;
@@ -434,15 +429,15 @@ export function buildPlanningTrendData(files: UploadedFileRecord[], roles: Role[
       `2026${String(36 + idx).padStart(2, '0')}`
     ]);
     const requiredHours = weekDemand.roleDemandRows.reduce((total, row) => total + row.requiredHours, 0);
-    const boundedRequired = clamp(requiredHours, scheduledHours * 0.92, scheduledHours * 1.08);
+    const calculatedRequired = requiredHours || 600;
 
     return {
       date: label,
-      requiredHours: Math.round((boundedRequired || 600) * weekScale(selectedWeekIndex)),
+      requiredHours: Math.round(calculatedRequired * weekScale(selectedWeekIndex)),
       scheduledHours: Math.round((scheduledHours || 595) * weekScheduleScale(selectedWeekIndex)),
-      variance: Math.round((scheduledHours || 595) * weekScheduleScale(selectedWeekIndex) - (boundedRequired || 600) * weekScale(selectedWeekIndex)),
-      capability: Math.round((((scheduledHours || 595) * weekScheduleScale(selectedWeekIndex) / Math.max((boundedRequired || 600) * weekScale(selectedWeekIndex), 1)) * 100) * 10) / 10,
-      gap: Math.max(Math.round((boundedRequired || 600) * weekScale(selectedWeekIndex) - (scheduledHours || 595) * weekScheduleScale(selectedWeekIndex)), 0)
+      variance: Math.round((scheduledHours || 595) * weekScheduleScale(selectedWeekIndex) - calculatedRequired * weekScale(selectedWeekIndex)),
+      capability: Math.round((((scheduledHours || 595) * weekScheduleScale(selectedWeekIndex) / Math.max(calculatedRequired * weekScale(selectedWeekIndex), 1)) * 100) * 10) / 10,
+      gap: Math.max(Math.round(calculatedRequired * weekScale(selectedWeekIndex) - (scheduledHours || 595) * weekScheduleScale(selectedWeekIndex)), 0)
     };
   });
 

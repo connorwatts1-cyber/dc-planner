@@ -8,10 +8,12 @@ import UploadComponent from '../components/UploadComponent';
 import { usePlannerContext } from '../context/PlannerContext';
 import { buildPlanningSnapshot, buildPlanningCapabilityRows, buildPlanningTrendData, buildPlanningAbsenceBreakdown, buildPlanningAbsenceTrendData, filterPlanningWeeks, planningWeekLabels } from '../services/analytics';
 import { buildForecastClassificationSummary } from '../services/stpMappingService';
+import { historicalFollowUpWeeks } from '../historicalFollowUpData';
 
 export default function PlanningPage() {
-  const { scopedUploadedFiles: uploadedFiles, roles } = usePlannerContext();
+  const { scopedUploadedFiles: uploadedFiles, uploadedFiles: allUploadedFiles, roles, resourceMapping } = usePlannerContext();
   const [selectedWeekIndices, setSelectedWeekIndices] = useState<number[]>([2]);
+  const [showPriorYearActuals, setShowPriorYearActuals] = useState(false);
 
   const fallbackCalendar = [
     { week: 'W36', label: 'Sep', req: '5637h', sch: '5550h', capability: '98.5%', status: 'OPTIMAL', tone: 'green' },
@@ -43,6 +45,7 @@ export default function PlanningPage() {
   const analyticsWeekIndex = allWeeksSelected ? null : selectedWeekIndices;
   const planning = buildPlanningSnapshot(uploadedFiles, roles, analyticsWeekIndex);
   const tableRows = buildPlanningCapabilityRows(uploadedFiles, roles, analyticsWeekIndex);
+  const mappedTableRows = tableRows.filter(row => row.status !== 'No mapping' && !String(row.role).startsWith('No mapping'));
   const trendDataForPlanning = filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex), selectedWeekIndices);
   const absenceRows = buildPlanningAbsenceBreakdown(uploadedFiles, analyticsWeekIndex);
   const absenceTrendData = filterPlanningWeeks(buildPlanningAbsenceTrendData(uploadedFiles, analyticsWeekIndex), selectedWeekIndices);
@@ -52,9 +55,28 @@ export default function PlanningPage() {
   const selectedCapability = selectedRequired > 0 ? (selectedScheduled / selectedRequired) * 100 : planning.capability;
   const selectedWeekLabel = allWeeksSelected ? 'All 8 weeks' : selectedWeeks.map(week => week.week).join(', ');
   const forecastWeekCodes = allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`);
-  const forecastSummary = buildForecastClassificationSummary(uploadedFiles, true, forecastWeekCodes);
+  const forecastSummary = buildForecastClassificationSummary(allUploadedFiles, true, forecastWeekCodes);
   const landTotal = forecastSummary.landDc + forecastSummary.landTransit;
   const oceanTotal = forecastSummary.oceanDc + forecastSummary.oceanTransit;
+  const inboundForecast = forecastSummary.inboundDc + forecastSummary.inboundTransit;
+  const outboundForecast = forecastSummary.outboundDc + forecastSummary.outboundTransit;
+  const truckVolume = Math.max(resourceMapping.truckVolumeM3, 0.1);
+  const inboundLoads = inboundForecast / truckVolume;
+  const outboundLoads = outboundForecast / truckVolume;
+  const capabilityRows = mappedTableRows as Array<typeof mappedTableRows[number] & { targetRate?: number }>;
+  const inboundCapacity = capabilityRows
+    .filter(row => /tipping|transit tip/i.test(String(row.role)))
+    .reduce((total, row) => total + Number(row.scheduledHours ?? 0) * Number(row.targetRate ?? 0), 0);
+  const outboundCapacity = capabilityRows
+    .filter(row => /loading|transit load/i.test(String(row.role)))
+    .reduce((total, row) => total + Number(row.scheduledHours ?? 0) * Number(row.targetRate ?? 0), 0);
+  const inboundCapability = inboundForecast > 0 ? inboundCapacity / inboundForecast * 100 : 0;
+  const outboundCapability = outboundForecast > 0 ? outboundCapacity / outboundForecast * 100 : 0;
+  const selectedForecastVolume = inboundForecast + outboundForecast;
+  const currentYearActual = historicalFollowUpWeeks.find(week => week.year === 2026 && week.week === planningWeekLabels[selectedWeekIndices[0]]);
+  const priorYearActual = historicalFollowUpWeeks.find(week => week.year === 2025 && week.week === planningWeekLabels[selectedWeekIndices[0]]);
+  const comparisonForecast = showPriorYearActuals ? priorYearActual?.m3Handled ?? 0 : selectedForecastVolume;
+  const comparisonActual = currentYearActual?.m3Handled ?? 0;
 
   const selectWeek = (index: number, event: React.MouseEvent) => {
     if (event.ctrlKey || event.metaKey) {
@@ -77,7 +99,10 @@ export default function PlanningPage() {
       </Grid>
 
       <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 800 }}>Forecast Weekly View</Typography>
+        <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+          <Box><Typography variant="h6" sx={{ fontWeight: 800 }}>Forecast Weekly View</Typography><Typography variant="body2" color="text.secondary">Forecast and actual volume comparison for the selected planning week.</Typography></Box>
+          <Button variant={showPriorYearActuals ? 'contained' : 'outlined'} size="small" onClick={() => setShowPriorYearActuals(current => !current)}>{showPriorYearActuals ? 'Showing prior-year actuals' : 'Show prior-year actuals'}</Button>
+        </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Forecast STP volumes classified from the uploaded workbook. Values are shown in m3.</Typography>
         <Grid container spacing={2}>
           {[
@@ -90,6 +115,31 @@ export default function PlanningPage() {
           ].map(([label, value]) => <Grid item xs={12} sm={6} md={2} key={label as string}><Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography variant="h6" fontWeight={800}>{Math.round(value as number).toLocaleString('en-GB')}</Typography></Paper></Grid>)}
         </Grid>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>Land split: DC {Math.round(forecastSummary.landDc).toLocaleString('en-GB')} m3, Transit {Math.round(forecastSummary.landTransit).toLocaleString('en-GB')} m3. Ocean split: DC {Math.round(forecastSummary.oceanDc).toLocaleString('en-GB')} m3, Transit {Math.round(forecastSummary.oceanTransit).toLocaleString('en-GB')} m3.</Typography>
+        <Grid container spacing={2} sx={{ mt: 1 }}>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Comparison source</Typography><Typography fontWeight={800}>{showPriorYearActuals ? 'Prior-year actuals' : 'Current forecast'}</Typography></Grid>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Comparison volume</Typography><Typography fontWeight={800}>{Math.round(comparisonForecast).toLocaleString('en-GB')} m3</Typography></Grid>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Current-year actual / variance</Typography><Typography fontWeight={800}>{Math.round(comparisonActual).toLocaleString('en-GB')} m3 / {Math.round(comparisonActual - comparisonForecast).toLocaleString('en-GB')} m3</Typography></Grid>
+        </Grid>
+      </Paper>
+
+      <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 800 }}>Forecast volume versus scheduled capability</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Load estimates use the Settings truck-volume assumption. Role capacity uses scheduled hours multiplied by the configured role target rate.</Typography>
+        <Grid container spacing={2}>
+          {[
+            ['Inbound loads', inboundLoads, inboundCapacity, inboundCapability],
+            ['Outbound loads', outboundLoads, outboundCapacity, outboundCapability]
+          ].map(([label, loads, capacity, capabilityValue]) => <Grid item xs={12} md={6} key={label as string}>
+            <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+              <Typography variant="subtitle1" fontWeight={800}>{label}</Typography>
+              <Grid container spacing={2} sx={{ mt: 0.5 }}>
+                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Forecast loads</Typography><Typography variant="h6" fontWeight={800}>{Math.ceil(loads as number)}</Typography></Grid>
+                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Supported m3</Typography><Typography variant="h6" fontWeight={800}>{Math.round(capacity as number).toLocaleString('en-GB')}</Typography></Grid>
+                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Capability</Typography><Typography variant="h6" fontWeight={800} color={(capabilityValue as number) >= 100 ? 'success.main' : 'error.main'}>{(capabilityValue as number).toFixed(1)}%</Typography></Grid>
+              </Grid>
+            </Paper>
+          </Grid>)}
+        </Grid>
       </Paper>
 
       <Box className="calendar-section" sx={{ mt: 3, mb: 3, background: '#fff', borderRadius: 3, border: '1px solid #dceaff', boxShadow: '0 8px 20px rgba(25,72,140,0.06)', p: 2, overflow: 'hidden' }}>
@@ -139,7 +189,7 @@ export default function PlanningPage() {
 
       <Box mt={3} className="table-wrap">
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>Capability Planning Table <Typography component="span" variant="body2" sx={{ color: '#58617a' }}>({selectedWeekLabel})</Typography></Typography>
-        <CapabilityTable key={`capability-table-${selectedWeekLabel}`} rows={tableRows} />
+        <CapabilityTable key={`capability-table-${selectedWeekLabel}`} rows={mappedTableRows} />
       </Box>
 
       <Grid container spacing={2} mt={1}>

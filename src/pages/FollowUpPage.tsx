@@ -4,10 +4,10 @@ import PageHeader from '../components/PageHeader';
 import KPI from '../components/KPI';
 import TrendChart from '../components/TrendChart';
 import UploadComponent from '../components/UploadComponent';
-import M2HistoryUpload from '../components/M2HistoryUpload';
 import { usePlannerContext } from '../context/PlannerContext';
 import WeekCalendarSelector, { PlanningCalendarWeek } from '../components/WeekCalendarSelector';
 import { historicalFollowUpWeeks } from '../historicalFollowUpData';
+import { MtpMonthData } from '../types';
 
 const WINDOW_SIZE = 8;
 
@@ -23,6 +23,24 @@ function uploadedHistory(records: Array<Record<string, string | number>>) {
     loginHours: Number(record.loginHours ?? record.paidHours ?? 0),
     pickingHours: Number(record.pickingHours ?? 0)
   })).filter(row => row.week && row.start && row.m3Handled > 0).sort((left, right) => left.start.localeCompare(right.start));
+}
+
+function uploadedMtpMonths(records: Array<Record<string, string | number>>): MtpMonthData[] {
+  return records.map(record => ({
+    month: String(record.month ?? ''),
+    weeksIncluded: Number(record.weeksIncluded ?? 0),
+    inboundVolume: Number(record.inboundVolume ?? 0),
+    outflowVolume: Number(record.outflowVolume ?? 0),
+    totalHandlingVolume: Number(record.totalHandlingVolume ?? 0),
+    averageWeeklyVolume: Number(record.averageWeeklyVolume ?? 0),
+    operationalHoursNeed: Number(record.operationalHoursNeed ?? 0),
+    fteForFp: Number(record.fteForFp ?? 0),
+    fteForPick: Number(record.fteForPick ?? 0),
+    fteDevelopment: Number(record.fteDevelopment ?? 0),
+    fteSickness: Number(record.fteSickness ?? 0),
+    fteHolidays: Number(record.fteHolidays ?? 0),
+    totalFteNeed: Number(record.totalFteNeed ?? 0)
+  })).filter(row => row.month && row.totalHandlingVolume > 0);
 }
 
 function formatDate(value: string) {
@@ -54,9 +72,11 @@ function toCalendarWeek(week: typeof historicalFollowUpWeeks[number], targetM3Pe
 }
 
 export default function FollowUpPage() {
-  const { uploadedFiles, resourceMapping } = usePlannerContext();
+  const { uploadedFiles, resourceMapping, roles } = usePlannerContext();
   const targetM3PerHour = Math.max(resourceMapping.productivityTargetM3PerHour, 0.1);
   const m2Upload = uploadedFiles.find(file => file.kind === 'm2-history' && file.status === 'parsed');
+  const mtpUpload = uploadedFiles.find(file => file.kind === 'mtp' && file.status === 'parsed');
+  const mtpMonths = mtpUpload ? uploadedMtpMonths(mtpUpload.records) : [];
   const history = m2Upload ? uploadedHistory(m2Upload.records) : historicalFollowUpWeeks;
   const [windowStart, setWindowStart] = useState(Math.max(history.length - WINDOW_SIZE, 0));
   const [fullYear, setFullYear] = useState(false);
@@ -111,7 +131,68 @@ export default function FollowUpPage() {
     const weeklyCapability = week.loginHours / Math.max(required, 1) * 100;
     return { ...week, required, absence, available: week.loginHours, variance: week.loginHours - required, capability: weeklyCapability, status: weeklyCapability < 90 ? 'Under' : weeklyCapability > 110 ? 'Over' : 'Optimal' };
   });
+  const actualByWeek = new Map(selectedRows.map(week => [`${week.year}-${week.week}`, week]));
+  const stpForecastRows = uploadedFiles.filter(file => file.kind === 'stp').flatMap(file => file.records);
+  const stpByWeek = new Map<string, number>();
+  stpForecastRows.forEach(record => {
+    const week = String(record.weekCode ?? record.week ?? '');
+    const volume = Number(record.volume ?? record.m3 ?? record.m2 ?? 0);
+    if (!week || volume <= 0) return;
+    stpByWeek.set(week, (stpByWeek.get(week) ?? 0) + volume);
+  });
+  const weeksByMonth = new Map<string, typeof selectedRows>();
+  selectedRows.forEach(week => {
+    const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
+    weeksByMonth.set(month, [...(weeksByMonth.get(month) ?? []), week]);
+  });
+  const mtpByMonth = new Map(mtpMonths.map(month => [month.month, month.totalHandlingVolume]));
+  const forecastVsActualRows = selectedRows.map(week => {
+    const key = `${week.year}-${week.week}`;
+    const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
+    const monthlyForecast = mtpByMonth.get(month);
+    const forecastVolume = monthlyForecast !== undefined
+      ? monthlyForecast / Math.max((weeksByMonth.get(month) ?? []).length, 1)
+      : stpByWeek.get(key) ?? 0;
+    const actualVolume = actualByWeek.get(key)?.m3Handled ?? 0;
+    const volumeVariance = actualVolume - forecastVolume;
+    const productivity = actualVolume / Math.max(week.loginHours, 1);
+    return { ...week, forecastVolume, actualVolume, volumeVariance, productivity, forecastSource: monthlyForecast !== undefined ? 'MTP' : stpByWeek.has(key) ? 'STP' : 'None' };
+  });
   const absenceEstimates = selectedRows.map(week => ({ week, ...estimateAbsence(week) }));
+  const actualAbsenceByType = { sickness: 0, holiday: 0, training: 0 };
+  uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
+    const type = String(record.absenceType ?? record.type ?? '').toLowerCase();
+    const hours = Number(record.absenceHours ?? record.hours ?? 0);
+    const date = String(record.date ?? record.absenceDate ?? '');
+    const matchesSelectedWeek = !date || selectedRows.some(week => weekKey(date) === `${week.year}-${week.week}`);
+    if (!matchesSelectedWeek || hours <= 0) return;
+    if (type.includes('holiday')) actualAbsenceByType.holiday += hours;
+    else if (type.includes('train') || type.includes('talk')) actualAbsenceByType.training += hours;
+    else if (type.includes('sick') || type.includes('absence')) actualAbsenceByType.sickness += hours;
+  });
+  const goalHours = absenceEstimates.reduce((total, item) => ({
+    sickness: total.sickness + item.sickness,
+    holiday: total.holiday + item.holiday,
+    training: total.training + item.training
+  }), { sickness: 0, holiday: 0, training: 0 });
+  const hoursVsGoal = [
+    { label: 'Absence / sickness', actual: hasMyTimeAbsence ? actualAbsenceByType.sickness : goalHours.sickness, goal: goalHours.sickness },
+    { label: 'Holiday', actual: hasMyTimeAbsence ? actualAbsenceByType.holiday : goalHours.holiday, goal: goalHours.holiday },
+    { label: 'Training', actual: hasMyTimeAbsence ? actualAbsenceByType.training : goalHours.training, goal: goalHours.training }
+  ].map(item => ({ ...item, variance: item.actual - item.goal, source: hasMyTimeAbsence ? 'MyTime' : 'Settings assumption' }));
+  const normalizedRole = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z]+/g, '');
+  const nonOpsRoles = new Set(roles.filter(role => role.type === 'Non-Ops').flatMap(role => [normalizedRole(role.role), normalizedRole(role.translation)]));
+  const scheduleRows = uploadedFiles.filter(file => file.kind === 'schedule' && file.status === 'parsed').flatMap(file => file.records);
+  const selectedScheduleRows = scheduleRows.filter(record => {
+    const date = String(record.date ?? record.shiftdate ?? '');
+    return !date || selectedRows.some(week => weekKey(date) === `${week.year}-${week.week}`);
+  });
+  const nonOpsHours = selectedScheduleRows.reduce((total, record) => {
+    const role = normalizedRole(record.role ?? record.workrole ?? record.WorkRole);
+    return total + (nonOpsRoles.has(role) ? Number(record.scheduledHours ?? record.hours ?? 0) : 0);
+  }, 0);
+  const scheduledRoleHours = selectedScheduleRows.reduce((total, record) => total + Number(record.scheduledHours ?? record.hours ?? 0), 0);
+  const nonOpsPercentage = scheduledRoleHours > 0 ? nonOpsHours / scheduledRoleHours * 100 : undefined;
   const absenceTrend = absenceEstimates.map(item => ({ date: item.week.week, absenceHours: hasMyTimeAbsence ? actualAbsenceByWeek.get(`${item.week.year}-${item.week.week}`) ?? 0 : item.sickness + item.holiday + item.training }));
   const weekKeys = history.map(week => `${week.year}-${week.week}`);
   const duplicateWeeks = weekKeys.filter((week, index) => weekKeys.indexOf(week) !== index);
@@ -206,6 +287,51 @@ export default function FollowUpPage() {
         </TableContainer>
       </Box>
 
+      <Box mt={2} className="table-wrap" sx={{ overflowX: 'auto' }}>
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>{mtpUpload ? 'MTP forecast versus actual M2' : 'STP forecast versus actual M2'} ({selectedLabel})</Typography>
+        <TableContainer>
+          <Table size="small" sx={{ minWidth: 920 }}>
+            <TableHead><TableRow>{['Week', mtpUpload ? 'MTP forecast m3' : 'STP forecast m3', 'Actual handled m3', 'Volume variance', 'Login hours', 'Actual m3/hour', 'Source'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+            <TableBody>{forecastVsActualRows.map(row => <TableRow key={`${row.week}-${row.year}`} hover>
+              <TableCell sx={{ fontWeight: 700 }}>{row.week} {row.year}</TableCell>
+              <TableCell>{Math.round(row.forecastVolume).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.actualVolume).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ color: row.volumeVariance < 0 ? 'error.main' : 'success.main', fontWeight: 700 }}>{Math.round(row.volumeVariance).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.loginHours).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ fontWeight: 800 }}>{row.productivity.toFixed(1)}</TableCell>
+              <TableCell>{row.forecastSource}</TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableContainer>
+      </Box>
+
+      <Box mt={2} className="table-wrap" sx={{ overflowX: 'auto' }}>
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Hours versus Settings goals ({selectedLabel})</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>MyTime values are used when uploaded. Otherwise the Settings monthly assumptions are shown as the current estimate.</Typography>
+        <TableContainer>
+          <Table size="small" sx={{ minWidth: 620 }}>
+            <TableHead><TableRow>{['Measure', 'Actual / estimate hours', 'Goal hours', 'Variance', 'Source'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+            <TableBody>{hoursVsGoal.map(item => <TableRow key={item.label} hover>
+              <TableCell sx={{ fontWeight: 700 }}>{item.label}</TableCell>
+              <TableCell>{Math.round(item.actual).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(item.goal).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ color: item.variance > 0 ? 'error.main' : 'success.main', fontWeight: 700 }}>{Math.round(item.variance).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{item.source}</TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableContainer>
+      </Box>
+
+      <Box mt={2} className="table-wrap">
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Non-Ops hours usage ({selectedLabel})</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Calculated from scheduled role hours and the Non-Ops role classifications in Settings.</Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Non-Ops hours</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Unavailable' : Math.round(nonOpsHours).toLocaleString('en-GB')}</Typography></Grid>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Total scheduled role hours</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Unavailable' : Math.round(scheduledRoleHours).toLocaleString('en-GB')}</Typography></Grid>
+          <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Non-Ops percentage</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Upload schedule' : `${nonOpsPercentage.toFixed(1)}%`}</Typography></Grid>
+        </Grid>
+      </Box>
+
       <Grid container spacing={2} mt={1}>
         <Grid item xs={12} md={6}>
           <Paper className="chart-card">
@@ -239,7 +365,7 @@ export default function FollowUpPage() {
           <Paper className="upload-panel">
             <Typography variant="h6" sx={{ fontWeight: 700 }}>Upload Area</Typography>
             <Stack spacing={2} mt={2}>
-              <M2HistoryUpload />
+              <UploadComponent title="MTP forecast workbook" accept=".xlsx,.xls" kind="mtp" />
               <UploadComponent title="Actual Volume (M2)" accept=".csv,.xlsx" kind="actual-volume" />
               <UploadComponent title="Paid Hours File (MyTime)" accept=".csv,.xlsx" kind="paid-hours" />
               <UploadComponent title="Absence File (MyTime)" accept=".csv,.xlsx" kind="absence" />

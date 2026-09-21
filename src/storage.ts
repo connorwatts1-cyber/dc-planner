@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'dc-planner-state-v1';
 const MTP_BASELINE_MIGRATION_KEY = 'dc-planner-mtp-baseline-v2';
+const BOOKING_OFFICE_SCOPE_MIGRATION_KEY = 'dc-planner-booking-office-scope-v1';
 
 export interface PlannerStorageState {
   roles: import('./types').Role[];
@@ -84,6 +85,10 @@ export function loadState(): PlannerStorageState {
     if (!raw) return { ...fallback, resourceMapping: applyFteCarryForward(fallback.resourceMapping) };
     const parsed = JSON.parse(raw) as Partial<PlannerStorageState>;
     const merged = { ...fallback, ...parsed };
+    if (!localStorage.getItem(BOOKING_OFFICE_SCOPE_MIGRATION_KEY)) {
+      merged.roles = (merged.roles || []).map(role => role.role === 'Booking Office' ? { ...role, type: 'Non-Ops' } : role);
+      localStorage.setItem(BOOKING_OFFICE_SCOPE_MIGRATION_KEY, 'applied');
+    }
     if (!localStorage.getItem(MTP_BASELINE_MIGRATION_KEY)) {
       merged.resourceMapping = applyMtpBaseline(merged.resourceMapping);
       localStorage.setItem(MTP_BASELINE_MIGRATION_KEY, 'applied');
@@ -110,7 +115,7 @@ export function roleDefaults() {
   return [
     { id: '1', role: 'Banding', translation: 'Banding', palletsPerHour: 43.1, m3PerPallet: 0.82, baselineValue: 35.34, type: 'Operational' },
     { id: '2', role: 'Bayclearing', translation: 'Bayclearing', palletsPerHour: 35, m3PerPallet: 0.82, baselineValue: 28.7, type: 'Operational' },
-    { id: '3', role: 'Booking Office', translation: 'Booking Office', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Operational' },
+    { id: '3', role: 'Booking Office', translation: 'Booking Office', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Non-Ops' },
     { id: '4', role: 'Co-Worker', translation: 'Co-Worker', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
     { id: '5', role: 'Cycles', translation: 'Cycles', palletsPerHour: 17, m3PerPallet: 0.82, baselineValue: 13.94, type: 'Operational' },
     { id: '6', role: 'DC Loading', translation: 'DC Loading', palletsPerHour: 42, m3PerPallet: 0.82, baselineValue: 34.44, type: 'Operational' },
