@@ -1,5 +1,7 @@
 import React from 'react';
 import { Box, Button, Card, CardContent, Grid, Typography } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 export interface PlanningCalendarWeek {
   week: string;
@@ -33,33 +35,44 @@ interface WeekCalendarSelectorProps {
   weeks?: PlanningCalendarWeek[];
   onSelect: (index: number, event: React.MouseEvent) => void;
   onSelectAll: () => void;
+  indexOffset?: number;
+  windowStart?: number;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  canPrevious?: boolean;
+  canNext?: boolean;
+  fullYearSelected?: boolean;
 }
 
-export default function WeekCalendarSelector({ selectedIndices, weeks = planningCalendar, onSelect, onSelectAll }: WeekCalendarSelectorProps) {
+export default function WeekCalendarSelector({ selectedIndices, weeks = planningCalendar, onSelect, onSelectAll, indexOffset = 0, windowStart = 0, onPrevious, onNext, canPrevious = false, canNext = false, fullYearSelected = false }: WeekCalendarSelectorProps) {
   return (
     <Box className="calendar-section" sx={{ mt: 3, mb: 3, background: '#fff', borderRadius: 3, border: '1px solid #dceaff', boxShadow: '0 8px 20px rgba(25,72,140,0.06)', p: 2, overflow: 'hidden' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 2 }}>
         <Box>
-          <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>8-Week Resource Calendar</Typography>
-          <Typography variant="body2" sx={{ color: '#58617a' }}>Click a week, or hold Ctrl/Cmd to select multiple weeks.</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>{fullYearSelected ? 'Full-Year Resource Calendar' : '8-Week Resource Calendar'}</Typography>
+          <Typography variant="body2" sx={{ color: '#58617a' }}>Weeks {windowStart + 1}-{windowStart + weeks.length} of the available history. Click a week, or hold Ctrl/Cmd to select multiple weeks.</Typography>
         </Box>
-        <Button variant="contained" className="calendar-button" onClick={onSelectAll}>View All 8 Weeks</Button>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {onPrevious && <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={onPrevious} disabled={!canPrevious}>Previous 8</Button>}
+          {onNext && <Button variant="outlined" endIcon={<ArrowForwardIcon />} onClick={onNext} disabled={!canNext}>Next 8</Button>}
+          <Button variant="contained" className="calendar-button" onClick={onSelectAll}>{fullYearSelected ? 'Return to 8 Weeks' : 'View Full Year'}</Button>
+        </Box>
       </Box>
       <Grid container spacing={1.5} className="calendar-grid">
         {weeks.map((item, index) => {
-          const selected = selectedIndices.includes(index);
+          const globalIndex = index + indexOffset;
+          const selected = selectedIndices.includes(globalIndex);
           const capability = Number.parseFloat(item.capability.replace('%', '')) || 0;
           const style = capabilityStyle(capability);
           return (
             <Grid item xs={12} sm={6} md={1.5} key={item.week}>
               <Card
-                onClick={event => onSelect(index, event)}
+                onClick={event => onSelect(globalIndex, event)}
                 sx={{ cursor: 'pointer', border: `2px solid ${selected ? '#102d6e' : style.border}`, borderRadius: 2, boxShadow: selected ? '0 0 0 2px rgba(16,45,110,0.18)' : '0 8px 20px rgba(25,72,140,0.06)' }}
               >
                 <CardContent sx={{ p: 1.5 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{item.week}</Typography>
-                    <Typography variant="caption" sx={{ fontWeight: 800, color: item.tone === 'orange' ? '#a84300' : '#2a6eaf', background: item.tone === 'orange' ? '#ffe0cc' : '#e6f1ff', px: 1, py: 0.2, borderRadius: 1 }}>{index >= 4 ? '>4W' : 'ROTA'}</Typography>
                   </Box>
                   <Typography variant="caption" sx={{ display: 'block', color: '#58617a', mb: 1 }}>{item.label}</Typography>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>Req: {item.req}</Typography>

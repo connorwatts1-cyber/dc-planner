@@ -10,8 +10,7 @@ import { buildStpDemandPlan, stpRoleMappingConfig } from '../services/stpMapping
 import WeekCalendarSelector, { planningCalendar } from '../components/WeekCalendarSelector';
 import { roleDefaults } from '../mockData';
 
-function scenarioFromInputs(requiredHours: number, scheduledHours: number, m3Uplift: number, inboundTrucks: number, outboundTrucks: number, stpInboundVolume: number, stpOutboundVolume: number, inboundAdjustmentPercent: number, outboundAdjustmentPercent: number, roles = roleDefaults) {
-  const truckVolumeM3 = 120;
+function scenarioFromInputs(requiredHours: number, scheduledHours: number, m3Uplift: number, inboundTrucks: number, outboundTrucks: number, stpInboundVolume: number, stpOutboundVolume: number, inboundAdjustmentPercent: number, outboundAdjustmentPercent: number, truckVolumeM3: number, roles = roleDefaults) {
   const truckInboundM3 = inboundTrucks * truckVolumeM3;
   const truckOutboundM3 = outboundTrucks * truckVolumeM3;
   const adjustedStpInboundM3 = stpInboundVolume * inboundAdjustmentPercent / 100;
@@ -52,7 +51,7 @@ function scenarioFromInputs(requiredHours: number, scheduledHours: number, m3Upl
 }
 
 export default function ScenarioPage() {
-  const { scopedUploadedFiles: uploadedFiles, roles } = usePlannerContext();
+  const { scopedUploadedFiles: uploadedFiles, roles, resourceMapping } = usePlannerContext();
   const [selectedWeekIndices, setSelectedWeekIndices] = useState<number[]>([2]);
   const [m3Uplift, setM3Uplift] = useState(0);
   const [inboundTrucks, setInboundTrucks] = useState(0);
@@ -67,6 +66,9 @@ export default function ScenarioPage() {
   const stpDemand = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`));
   const stpInboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Tipping' || row.role === 'Transit Tipping').reduce((total, row) => total + row.volume, 0);
   const stpOutboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Loading' || row.role === 'Transit Loading').reduce((total, row) => total + row.volume, 0);
+  const truckVolumeAssumption = Math.max(resourceMapping.truckVolumeM3, 0.01);
+  const estimatedInboundTrucks = Math.ceil(stpInboundVolume / truckVolumeAssumption);
+  const estimatedOutboundTrucks = Math.ceil(stpOutboundVolume / truckVolumeAssumption);
   const calendarTrend = buildPlanningTrendData(uploadedFiles, roles, null);
   const calendarWeeks = planningCalendar.map((fallback, index) => {
     const actual = calendarTrend[index];
@@ -99,8 +101,9 @@ export default function ScenarioPage() {
     stpOutboundVolume,
     inboundAdjustmentPercent,
     outboundAdjustmentPercent,
+    resourceMapping.truckVolumeM3,
     roles
-  ), [selectedRequiredHours, selectedScheduledHours, m3Uplift, inboundTrucks, outboundTrucks, stpInboundVolume, stpOutboundVolume, inboundAdjustmentPercent, outboundAdjustmentPercent, roles]);
+  ), [selectedRequiredHours, selectedScheduledHours, m3Uplift, inboundTrucks, outboundTrucks, stpInboundVolume, stpOutboundVolume, inboundAdjustmentPercent, outboundAdjustmentPercent, resourceMapping.truckVolumeM3, roles]);
 
   return (
     <Box>
@@ -116,7 +119,12 @@ export default function ScenarioPage() {
       </Grid>
 
       <Paper className="table-wrap" sx={{ mt: 3 }}>
-            <Typography variant="h6" sx={{ fontWeight: 800 }}>Scenario Inputs ({selectedLabel})</Typography>
+        <Typography variant="h6" sx={{ fontWeight: 800 }}>Estimated Trucks ({selectedLabel})</Typography>
+        <Grid container spacing={2} sx={{ mt: 0.5, mb: 2 }}>
+          <Grid item xs={12} sm={6} md={4}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Estimated Inbound Trucks</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{estimatedInboundTrucks}</Typography><Typography variant="caption">{Math.ceil(stpInboundVolume).toLocaleString()} m3 ÷ {truckVolumeAssumption} m3/truck</Typography></Paper></Grid>
+          <Grid item xs={12} sm={6} md={4}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Estimated Outbound Trucks</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{estimatedOutboundTrucks}</Typography><Typography variant="caption">{Math.ceil(stpOutboundVolume).toLocaleString()} m3 ÷ {truckVolumeAssumption} m3/truck</Typography></Paper></Grid>
+        </Grid>
+        <Typography variant="h6" sx={{ fontWeight: 800 }}>Scenario Inputs ({selectedLabel})</Typography>
         <Grid container spacing={2} mt={1}>
           <Grid item xs={12} md={4}>
             <TextField label="M3 uplift" type="number" fullWidth value={m3Uplift} onChange={event => setM3Uplift(Number(event.target.value || 0))} />
@@ -157,7 +165,7 @@ export default function ScenarioPage() {
         </Grid>
 
         <Box sx={{ mt: 2 }}>
-          <Typography variant="caption" color="text.secondary">Truck volume assumption: 120 m3 per inbound or outbound truck</Typography>
+              <Typography variant="caption" color="text.secondary">Truck volume assumption: {resourceMapping.truckVolumeM3} m3 per inbound or outbound truck</Typography>
         </Box>
 
         <Box mt={2} sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>

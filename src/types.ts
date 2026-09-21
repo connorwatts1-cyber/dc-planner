@@ -52,6 +52,8 @@ export interface ResourceMapping {
   training: number;
   fte: number;
   leavers: number;
+  truckVolumeM3: number;
+  productivityTargetM3PerHour: number;
   monthValues: Record<string, MonthlyResourceMapping>;
 }
 
@@ -93,7 +95,9 @@ export type UploadKind =
   | 'absence'
   | 'stp'
   | 'paid-hours'
-  | 'actual-volume';
+  | 'actual-volume'
+  | 'mtp'
+  | 'm2-history';
 
 export type UploadDocumentKind = 'forecast' | 'schedule' | 'absence' | 'stp' | 'paid-hours' | 'volume';
 
@@ -121,4 +125,20 @@ export interface UploadedFileRecord {
   records: Array<Record<string, string | number>>;
   status: 'parsed' | 'placeholder' | 'error';
   message: string;
+}
+
+export interface MtpMonthData {
+  month: string;
+  weeksIncluded: number;
+  inboundVolume: number;
+  outflowVolume: number;
+  totalHandlingVolume: number;
+  averageWeeklyVolume: number;
+  operationalHoursNeed: number;
+  fteForFp: number;
+  fteForPick: number;
+  fteDevelopment: number;
+  fteSickness: number;
+  fteHolidays: number;
+  totalFteNeed: number;
 }

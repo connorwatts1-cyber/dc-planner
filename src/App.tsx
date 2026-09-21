@@ -19,11 +19,15 @@ import SettingsPage from './pages/SettingsPage';
 import ScenarioPage from './pages/ScenarioPage';
 import ExportPage from './pages/ExportPage';
 import LiveScheduleDashboardPage from './pages/LiveScheduleDashboardPage';
+import KpiDashboardPage from './pages/KpiDashboardPage';
+import HeadcountPage from './pages/HeadcountPage';
 
 const navigation = [
   { label: 'Planning', path: '/', icon: <FactCheckIcon /> },
   { label: 'Follow Up', path: '/follow-up', icon: <QueryStatsIcon /> },
   { label: 'Scenario Tool', path: '/scenario-tool', icon: <QueryStatsIcon /> },
+  { label: 'KPI Dashboard', path: '/kpi-dashboard', icon: <QueryStatsIcon /> },
+  { label: 'Headcount', path: '/headcount', icon: <QueryStatsIcon /> },
   { label: 'Live Schedule Dashboard', path: '/live-schedule-dashboard', icon: <CalendarMonthIcon /> },
   { label: 'Settings', path: '/settings', icon: <SettingsIcon /> },
   { label: 'Export', path: '/export', icon: <DownloadIcon /> }
@@ -88,6 +92,8 @@ function AppShell() {
               <Route path="/" element={<PlanningPage />} />
               <Route path="/follow-up" element={<FollowUpPage />} />
               <Route path="/scenario-tool" element={<ScenarioPage />} />
+              <Route path="/kpi-dashboard" element={<KpiDashboardPage />} />
+              <Route path="/headcount" element={<HeadcountPage />} />
               <Route path="/live-schedule-dashboard" element={<LiveScheduleDashboardPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/export" element={<ExportPage />} />

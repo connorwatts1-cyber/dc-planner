@@ -1,4 +1,19 @@
-import { AbsenceData, CapabilityMetric, ExportMetrics, LabourData, ResourceMapping, Role, ScenarioData } from './types';
+import { AbsenceData, CapabilityMetric, ExportMetrics, LabourData, MtpMonthData, ResourceMapping, Role, ScenarioData } from './types';
+
+export const mtpMonths: MtpMonthData[] = [
+  { month: 'September', weeksIncluded: 217835, inboundVolume: 101342, outflowVolume: 99109, totalHandlingVolume: 200451, averageWeeklyVolume: 46294, operationalHoursNeed: 19385, fteForFp: 127, fteForPick: 8, fteDevelopment: 3, fteSickness: 21, fteHolidays: 14, totalFteNeed: 173 },
+  { month: 'October', weeksIncluded: 239404, inboundVolume: 96798, outflowVolume: 97766, totalHandlingVolume: 194565, averageWeeklyVolume: 44934, operationalHoursNeed: 18845, fteForFp: 124, fteForPick: 8, fteDevelopment: 3, fteSickness: 20, fteHolidays: 16, totalFteNeed: 171 },
+  { month: 'November', weeksIncluded: 208653, inboundVolume: 99731, outflowVolume: 98840, totalHandlingVolume: 198571, averageWeeklyVolume: 45859, operationalHoursNeed: 19216, fteForFp: 132, fteForPick: 9, fteDevelopment: 3, fteSickness: 20, fteHolidays: 16, totalFteNeed: 180 },
+  { month: 'December', weeksIncluded: 179123, inboundVolume: 90098, outflowVolume: 90270, totalHandlingVolume: 180368, averageWeeklyVolume: 41656, operationalHoursNeed: 17412, fteForFp: 110, fteForPick: 7, fteDevelopment: 2, fteSickness: 20, fteHolidays: 32, totalFteNeed: 171 },
+  { month: 'January', weeksIncluded: 189940, inboundVolume: 84662, outflowVolume: 83263, totalHandlingVolume: 167925, averageWeeklyVolume: 38782, operationalHoursNeed: 16239, fteForFp: 111, fteForPick: 8, fteDevelopment: 8, fteSickness: 20, fteHolidays: 20, totalFteNeed: 167 },
+  { month: 'February', weeksIncluded: 189307, inboundVolume: 93477, outflowVolume: 87451, totalHandlingVolume: 180928, averageWeeklyVolume: 41785, operationalHoursNeed: 17312, fteForFp: 125, fteForPick: 8, fteDevelopment: 4, fteSickness: 20, fteHolidays: 28, totalFteNeed: 185 },
+  { month: 'March', weeksIncluded: 208813, inboundVolume: 100920, outflowVolume: 91336, totalHandlingVolume: 192256, averageWeeklyVolume: 44401, operationalHoursNeed: 18389, fteForFp: 116, fteForPick: 7, fteDevelopment: 5, fteSickness: 20, fteHolidays: 28, totalFteNeed: 175 },
+  { month: 'April', weeksIncluded: 165058, inboundVolume: 83825, outflowVolume: 88690, totalHandlingVolume: 172515, averageWeeklyVolume: 39842, operationalHoursNeed: 16590, fteForFp: 109, fteForPick: 7, fteDevelopment: 6, fteSickness: 20, fteHolidays: 29, totalFteNeed: 171 },
+  { month: 'May', weeksIncluded: 197341, inboundVolume: 72212, outflowVolume: 85642, totalHandlingVolume: 157853, averageWeeklyVolume: 36456, operationalHoursNeed: 15110, fteForFp: 103, fteForPick: 7, fteDevelopment: 7, fteSickness: 19, fteHolidays: 35, totalFteNeed: 172 },
+  { month: 'June', weeksIncluded: 170234, inboundVolume: 84494, outflowVolume: 79698, totalHandlingVolume: 164192, averageWeeklyVolume: 37920, operationalHoursNeed: 15589, fteForFp: 103, fteForPick: 6, fteDevelopment: 8, fteSickness: 19, fteHolidays: 38, totalFteNeed: 175 },
+  { month: 'July', weeksIncluded: 206494, inboundVolume: 101698, outflowVolume: 95861, totalHandlingVolume: 197559, averageWeeklyVolume: 45626, operationalHoursNeed: 18737, fteForFp: 123, fteForPick: 8, fteDevelopment: 8, fteSickness: 19, fteHolidays: 19, totalFteNeed: 177 },
+  { month: 'August', weeksIncluded: 232039, inboundVolume: 107262, outflowVolume: 106670, totalHandlingVolume: 213931, averageWeeklyVolume: 49407, operationalHoursNeed: 20321, fteForFp: 134, fteForPick: 9, fteDevelopment: 1, fteSickness: 19, fteHolidays: 13, totalFteNeed: 176 }
+];
 
 export const roleDefaults: Role[] = [
   { id: '1', role: 'Banding', translation: 'Banding', palletsPerHour: 43.1, m3PerPallet: 0.82, baselineValue: 35.34, type: 'Operational' },
@@ -53,19 +68,21 @@ export const resourceMapping: ResourceMapping = {
   training: 0.02,
   fte: 206,
   leavers: 1.5,
+  truckVolumeM3: 60,
+  productivityTargetM3PerHour: 7.3,
   monthValues: {
-    September: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    October: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    November: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    December: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    January: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    February: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    March: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    April: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    May: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    June: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    July: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
-    August: { absence: 0.1, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 }
+    September: { absence: 0.10, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
+    October: { absence: 0.10, holiday: 0.08, training: 0.02, fte: 204, leavers: 1.5 },
+    November: { absence: 0.10, holiday: 0.08, training: 0.02, fte: 203, leavers: 1.5 },
+    December: { absence: 0.10, holiday: 0.16, training: 0.02, fte: 201, leavers: 1.5 },
+    January: { absence: 0.10, holiday: 0.10, training: 0.07, fte: 200, leavers: 1.5 },
+    February: { absence: 0.10, holiday: 0.14, training: 0.03, fte: 198, leavers: 1.5 },
+    March: { absence: 0.10, holiday: 0.14, training: 0.04, fte: 197, leavers: 1.5 },
+    April: { absence: 0.10, holiday: 0.15, training: 0.05, fte: 195, leavers: 1.5 },
+    May: { absence: 0.10, holiday: 0.18, training: 0.065, fte: 194, leavers: 1.5 },
+    June: { absence: 0.10, holiday: 0.20, training: 0.075, fte: 192, leavers: 1.5 },
+    July: { absence: 0.10, holiday: 0.10, training: 0.06, fte: 191, leavers: 1.5 },
+    August: { absence: 0.10, holiday: 0.07, training: 0.01, fte: 189, leavers: 1.5 }
   }
 };
 

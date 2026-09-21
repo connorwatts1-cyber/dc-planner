@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { UploadedFileRecord, UploadKind } from '../types';
+import { MtpMonthData, UploadedFileRecord, UploadKind } from '../types';
 import { stpRoleMappingConfig } from './stpMappingService';
 
 export interface ParsedFileOptions {
@@ -115,6 +115,85 @@ function toNumber(value: unknown): number {
   const valueString = String(value ?? '').replace(/[^0-9.-]/g, '');
   const raw = Number(valueString);
   return Number.isFinite(raw) ? raw : 0;
+}
+
+function toMtpNumber(value: unknown): number {
+  const raw = Number(String(value ?? '').replace(/[%£$,]/g, '').trim());
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function isoWeekDetails(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  return { year: utcDate.getUTCFullYear(), week: Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7) };
+}
+
+function parseM2WorkbookSheet(sheet: XLSX.WorkSheet): Array<Record<string, string | number>> {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
+  const top = rows[1] ?? [];
+  const picking = rows[37] ?? [];
+  const range = String(top[2] ?? '');
+  const [start = '', end = ''] = range.split(' - ');
+  if (!start || !range.includes(' - ')) return [];
+  const week = isoWeekDetails(start);
+  return [{
+    weekCode: `${week.year}-W${String(week.week).padStart(2, '0')}`,
+    week: `W${String(week.week).padStart(2, '0')}`,
+    year: week.year,
+    start,
+    end,
+    m3Received: toMtpNumber(top[19]),
+    m3Shipped: toMtpNumber(top[20]),
+    m3Handled: toMtpNumber(top[21]),
+    volume: toMtpNumber(top[21]),
+    actualVolume: toMtpNumber(top[21]),
+    loginHours: toMtpNumber(top[26]),
+    paidHours: toMtpNumber(top[26]),
+    pickingHours: toMtpNumber(picking[4])
+  }];
+}
+
+function parseMtpWorkbookSheet(sheet: XLSX.WorkSheet): MtpMonthData[] {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
+  const flowHeaderIndex = rows.findIndex(row => String(row[0] ?? '').trim().toLowerCase() === 'flow');
+  if (flowHeaderIndex < 0) return [];
+
+  const monthNames = ['September', 'October', 'November', 'December', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August'];
+  const findRow = (label: string) => rows.find(row => String(row[0] ?? '').trim().toLowerCase() === label.toLowerCase());
+  const weeksRow = rows[0];
+  const inbound = findRow('TOTAL INBOUND');
+  const outflow = findRow('Total Outflow');
+  const handling = findRow('Total Handling ');
+  const weekly = findRow('Average Weekly volume ');
+  const hours = findRow('Operational hrs need');
+  const fp = findRow('FTE for FP');
+  const pick = findRow('FTE for Pick');
+  const development = findRow('FTE to cover development');
+  const sickness = findRow('FTE to cover sickness');
+  const holidays = findRow('FTE to cover holidays');
+  const total = findRow('Total FTE need');
+
+  return monthNames.map((month, index) => {
+    const column = index + 2;
+    return {
+      month,
+      weeksIncluded: toMtpNumber(weeksRow?.[column]),
+      inboundVolume: toMtpNumber(inbound?.[column]),
+      outflowVolume: toMtpNumber(outflow?.[column]),
+      totalHandlingVolume: toMtpNumber(handling?.[column]),
+      averageWeeklyVolume: toMtpNumber(weekly?.[column]),
+      operationalHoursNeed: toMtpNumber(hours?.[column]),
+      fteForFp: toMtpNumber(fp?.[column]),
+      fteForPick: toMtpNumber(pick?.[column]),
+      fteDevelopment: toMtpNumber(development?.[column]),
+      fteSickness: toMtpNumber(sickness?.[column]),
+      fteHolidays: toMtpNumber(holidays?.[column]),
+      totalFteNeed: toMtpNumber(total?.[column])
+    };
+  });
 }
 
 function normalizeRoleName(role: string): string {
@@ -355,6 +434,32 @@ export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast
       const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
       if (!workbook.SheetNames.length) {
         throw new Error('No worksheet found in workbook.');
+      }
+
+      if (kind === 'mtp') {
+        const mtpRows = workbook.SheetNames.flatMap(sheetName => parseMtpWorkbookSheet(workbook.Sheets[sheetName]));
+        if (!mtpRows.some(row => row.totalHandlingVolume > 0)) throw new Error('No MTP summary rows found in workbook.');
+        return {
+          fileName,
+          kind,
+          importedAt: new Date().toISOString(),
+          records: mtpRows as unknown as Array<Record<string, string | number>>,
+          status: 'parsed',
+          message: `Parsed ${mtpRows.length} monthly MTP records from ${fileName}.`
+        };
+      }
+
+      if (kind === 'm2-history') {
+        const records = workbook.SheetNames.flatMap(sheetName => parseM2WorkbookSheet(workbook.Sheets[sheetName]));
+        if (!records.length) throw new Error('No weekly M2 productivity rows found in workbook.');
+        return {
+          fileName,
+          kind,
+          importedAt: new Date().toISOString(),
+          records,
+          status: 'parsed',
+          message: `Parsed ${records.length} weekly M2 record${records.length === 1 ? '' : 's'} from ${fileName}.`
+        };
       }
 
       const records: Array<Record<string, string | number>> = [];

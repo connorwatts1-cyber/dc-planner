@@ -46,6 +46,8 @@ export default function SettingsPage() {
           <Grid item xs={12} sm={6} md={3}><TextField label="Training" type="number" value={resourceMapping.training} onChange={(e) => updateResourceMapping('training', Number(e.target.value))} fullWidth /></Grid>
           <Grid item xs={12} sm={6} md={3}><TextField label="FTE" type="number" value={resourceMapping.fte} onChange={(e) => updateResourceMapping('fte', Number(e.target.value))} fullWidth /></Grid>
           <Grid item xs={12} sm={6} md={3}><TextField label="Leavers" type="number" value={resourceMapping.leavers} onChange={(e) => updateResourceMapping('leavers', Number(e.target.value))} fullWidth /></Grid>
+          <Grid item xs={12} sm={6} md={3}><TextField label="Truck Volume (m3)" type="number" value={resourceMapping.truckVolumeM3} onChange={(e) => updateResourceMapping('truckVolumeM3', Number(e.target.value))} fullWidth /></Grid>
+          <Grid item xs={12} sm={6} md={3}><TextField label="Productivity Target (m3/h)" type="number" value={resourceMapping.productivityTargetM3PerHour} onChange={(e) => updateResourceMapping('productivityTargetM3PerHour', Number(e.target.value))} fullWidth inputProps={{ min: 0.1, step: '0.1' }} /></Grid>
         </Grid>
         <Typography variant="subtitle2" sx={{ mt: 2 }}>Monthly Mapping</Typography>
         <Box sx={{ minWidth: 980, mt: 1 }}>

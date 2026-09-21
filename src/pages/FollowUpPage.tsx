@@ -1,32 +1,134 @@
-import React, { useState } from 'react';
-import { Box, Grid, Paper, Typography, Stack } from '@mui/material';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Box, Grid, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 import KPI from '../components/KPI';
-import CapabilityTable from '../components/CapabilityTable';
 import TrendChart from '../components/TrendChart';
 import UploadComponent from '../components/UploadComponent';
+import M2HistoryUpload from '../components/M2HistoryUpload';
 import { usePlannerContext } from '../context/PlannerContext';
-import WeekCalendarSelector, { planningCalendar } from '../components/WeekCalendarSelector';
-import { buildPlanningSnapshot, buildPlanningCapabilityRows, buildPlanningTrendData, buildPlanningAbsenceBreakdown, buildPlanningAbsenceTrendData, filterPlanningWeeks } from '../services/analytics';
+import WeekCalendarSelector, { PlanningCalendarWeek } from '../components/WeekCalendarSelector';
+import { historicalFollowUpWeeks } from '../historicalFollowUpData';
+
+const WINDOW_SIZE = 8;
+
+function uploadedHistory(records: Array<Record<string, string | number>>) {
+  return records.map(record => ({
+    week: String(record.week ?? ''),
+    year: Number(record.year ?? 0),
+    start: String(record.start ?? ''),
+    end: String(record.end ?? ''),
+    m3Received: Number(record.m3Received ?? 0),
+    m3Shipped: Number(record.m3Shipped ?? 0),
+    m3Handled: Number(record.m3Handled ?? record.volume ?? 0),
+    loginHours: Number(record.loginHours ?? record.paidHours ?? 0),
+    pickingHours: Number(record.pickingHours ?? 0)
+  })).filter(row => row.week && row.start && row.m3Handled > 0).sort((left, right) => left.start.localeCompare(right.start));
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short' }).format(new Date(`${value}T00:00:00`));
+}
+
+function weekKey(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${utcDate.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function toCalendarWeek(week: typeof historicalFollowUpWeeks[number], targetM3PerHour: number): PlanningCalendarWeek {
+  const requiredHours = week.m3Handled / targetM3PerHour;
+  const capability = week.loginHours / Math.max(requiredHours, 1) * 100;
+  return {
+    week: `${week.week} ${week.year}`,
+    label: `${formatDate(week.start)}-${formatDate(week.end)}`,
+    req: `${Math.round(requiredHours)}h`,
+    sch: `${Math.round(week.loginHours)}h`,
+    capability: `${capability.toFixed(1)}%`,
+    status: capability < 95 ? 'UNDER CAPABILITY' : capability > 110 ? 'OVER CAPABILITY' : 'OPTIMAL',
+    tone: capability < 95 ? 'orange' : capability > 110 ? 'blue' : 'green'
+  };
+}
 
 export default function FollowUpPage() {
-  const { scopedUploadedFiles: uploadedFiles, roles } = usePlannerContext();
-  const [selectedWeekIndices, setSelectedWeekIndices] = useState<number[]>([2]);
-  const allWeeksSelected = selectedWeekIndices.length === planningCalendar.length;
-  const analyticsWeekIndex = allWeeksSelected ? null : selectedWeekIndices;
-  const followUp = buildPlanningSnapshot(uploadedFiles, roles, analyticsWeekIndex);
-  const rows = buildPlanningCapabilityRows(uploadedFiles, roles, analyticsWeekIndex);
-  const trend = filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex), selectedWeekIndices);
-  const calendarTrend = buildPlanningTrendData(uploadedFiles, roles, null);
-  const calendarWeeks = planningCalendar.map((fallback, index) => {
-    const actual = calendarTrend[index];
-    if (!actual) return fallback;
-    const capability = actual.requiredHours > 0 ? actual.scheduledHours / actual.requiredHours * 100 : 0;
-    return { ...fallback, req: `${Math.round(actual.requiredHours)}h`, sch: `${Math.round(actual.scheduledHours)}h`, capability: `${capability.toFixed(1)}%`, status: capability < 95 ? 'UNDER CAPABILITY' : capability > 110 ? 'OVER CAPABILITY' : 'OPTIMAL' };
+  const { uploadedFiles, resourceMapping } = usePlannerContext();
+  const targetM3PerHour = Math.max(resourceMapping.productivityTargetM3PerHour, 0.1);
+  const m2Upload = uploadedFiles.find(file => file.kind === 'm2-history' && file.status === 'parsed');
+  const history = m2Upload ? uploadedHistory(m2Upload.records) : historicalFollowUpWeeks;
+  const [windowStart, setWindowStart] = useState(Math.max(history.length - WINDOW_SIZE, 0));
+  const [fullYear, setFullYear] = useState(false);
+  const [selectedWeekIndices, setSelectedWeekIndices] = useState<number[]>(() => history.slice(-WINDOW_SIZE).map((_, index) => history.length - WINDOW_SIZE + index));
+  useEffect(() => {
+    const start = Math.max(history.length - WINDOW_SIZE, 0);
+    setWindowStart(start);
+    setSelectedWeekIndices(history.slice(start).map((_, index) => start + index));
+    setFullYear(false);
+  }, [m2Upload?.importedAt]);
+  const visibleWeeks = fullYear ? history : history.slice(windowStart, windowStart + WINDOW_SIZE);
+  const selectedWeeks = history.filter((_, index) => selectedWeekIndices.includes(index));
+  const selectedLabel = fullYear ? 'Full year' : selectedWeeks.length === 1 ? `${selectedWeeks[0].week} ${selectedWeeks[0].year}` : `${selectedWeeks.length} selected weeks`;
+  const calendarWeeks = useMemo(() => visibleWeeks.map(week => toCalendarWeek(week, targetM3PerHour)), [visibleWeeks, targetM3PerHour]);
+  const selectedRows = selectedWeeks.length ? selectedWeeks : visibleWeeks;
+  const requiredHours = selectedRows.reduce((sum, week) => sum + week.m3Handled / targetM3PerHour, 0);
+  const loginHours = selectedRows.reduce((sum, week) => sum + week.loginHours, 0);
+  const actualVolume = selectedRows.reduce((sum, week) => sum + week.m3Handled, 0);
+  const hasMyTimeAbsence = uploadedFiles.some(file => file.kind === 'absence' && file.status === 'parsed' && file.records.length > 0);
+  const estimateAbsence = (week: typeof history[number]) => {
+    const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
+    const assumptions = resourceMapping.monthValues?.[month] ?? resourceMapping;
+    const fte = assumptions.fte ?? resourceMapping.fte;
+    const weeklyHours = fte * 37.5;
+    return {
+      sickness: weeklyHours * (assumptions.absence ?? resourceMapping.absence),
+      holiday: weeklyHours * (assumptions.holiday ?? resourceMapping.holiday),
+      training: weeklyHours * (assumptions.training ?? resourceMapping.training)
+    };
+  };
+  const actualAbsenceByWeek = new Map<string, number>();
+  uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
+    const date = String(record.date ?? record.absenceDate ?? '');
+    const key = String(record.weekCode ?? record.week ?? (date ? weekKey(date) : ''));
+    const hours = Number(record.absenceHours ?? record.hours ?? 0);
+    if (key && hours > 0) actualAbsenceByWeek.set(key, (actualAbsenceByWeek.get(key) ?? 0) + hours);
   });
-  const absenceRows = buildPlanningAbsenceBreakdown(uploadedFiles, analyticsWeekIndex);
-  const absenceTrend = filterPlanningWeeks(buildPlanningAbsenceTrendData(uploadedFiles, analyticsWeekIndex), selectedWeekIndices);
-  const selectedLabel = allWeeksSelected ? 'All 8 weeks' : selectedWeekIndices.map(index => planningCalendar[index].week).join(', ');
+  const absenceHoursForWeek = (week: typeof history[number]) => hasMyTimeAbsence
+    ? actualAbsenceByWeek.get(`${week.year}-${week.week}`) ?? 0
+    : (() => { const estimate = estimateAbsence(week); return estimate.sickness + estimate.holiday + estimate.training; })();
+  const actualAbsenceHours = selectedRows.reduce((sum, week) => {
+    return sum + absenceHoursForWeek(week);
+  }, 0);
+  const capability = loginHours / Math.max(requiredHours, 1) * 100;
+  const trend = selectedRows.map(week => {
+    const required = week.m3Handled / targetM3PerHour;
+    return { date: week.week, requiredHours: required, scheduledHours: week.loginHours, variance: week.loginHours - required, capability: week.loginHours / Math.max(required, 1) * 100, gap: Math.max(required - week.loginHours, 0) };
+  });
+  const weeklyRows = selectedRows.map(week => {
+    const required = week.m3Handled / targetM3PerHour;
+    const absence = absenceHoursForWeek(week);
+    const weeklyCapability = week.loginHours / Math.max(required, 1) * 100;
+    return { ...week, required, absence, available: week.loginHours, variance: week.loginHours - required, capability: weeklyCapability, status: weeklyCapability < 90 ? 'Under' : weeklyCapability > 110 ? 'Over' : 'Optimal' };
+  });
+  const absenceEstimates = selectedRows.map(week => ({ week, ...estimateAbsence(week) }));
+  const absenceTrend = absenceEstimates.map(item => ({ date: item.week.week, absenceHours: hasMyTimeAbsence ? actualAbsenceByWeek.get(`${item.week.year}-${item.week.week}`) ?? 0 : item.sickness + item.holiday + item.training }));
+  const weekKeys = history.map(week => `${week.year}-${week.week}`);
+  const duplicateWeeks = weekKeys.filter((week, index) => weekKeys.indexOf(week) !== index);
+  const expectedWeekKeys = new Set<string>();
+  const firstDate = new Date(`${history[0].start}T00:00:00`);
+  for (let index = 0; index < history.length; index += 1) {
+    const date = new Date(firstDate);
+    date.setDate(firstDate.getDate() + index * 7);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const day = date.getUTCDay() || 7;
+    const thursday = new Date(date);
+    thursday.setUTCDate(date.getUTCDate() + 4 - day);
+    const week = Math.ceil((((thursday.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    expectedWeekKeys.add(`${thursday.getUTCFullYear()}-W${String(week).padStart(2, '0')}`);
+  }
+  const missingWeeks = Array.from(expectedWeekKeys).filter(week => !weekKeys.includes(week));
+  const latestWeek = history[history.length - 1];
   const selectWeek = (index: number, event: React.MouseEvent) => {
     if (event.ctrlKey || event.metaKey) {
       setSelectedWeekIndices(current => current.includes(index)
@@ -37,34 +139,84 @@ export default function FollowUpPage() {
     setSelectedWeekIndices([index]);
   };
 
+  const toggleFullYear = () => {
+    if (fullYear) {
+      const start = Math.max(history.length - WINDOW_SIZE, 0);
+      setWindowStart(start);
+      setSelectedWeekIndices(history.slice(start).map((_, index) => start + index));
+      setFullYear(false);
+      return;
+    }
+    setSelectedWeekIndices(history.map((_, index) => index));
+    setFullYear(true);
+  };
+
+  const moveWindow = (direction: number) => {
+    const nextStart = Math.min(Math.max(windowStart + direction * WINDOW_SIZE, 0), history.length - WINDOW_SIZE);
+    setWindowStart(nextStart);
+    setSelectedWeekIndices(history.slice(nextStart, nextStart + WINDOW_SIZE).map((_, index) => nextStart + index));
+  };
+
   return (
     <Box>
-      <PageHeader title="Follow Up" subtitle={`Weekly Review — ${selectedLabel}`} />
-      <Grid container spacing={2} className="card-grid">
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Required Hours" value={Math.round(followUp.requiredHours)} /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Paid Hours" value={Math.round(followUp.scheduledHours)} /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Variance" value={Math.round(followUp.variance)} /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(followUp.capability * 10) / 10}%`} /></Grid>
+      <PageHeader title="Follow Up" subtitle={`Historical weekly review - ${selectedLabel}`} />
+      <Grid container className="card-grid" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(5, minmax(0, 1fr))' }, gap: 2 }}>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><KPI title="Required Hours" value={Math.round(requiredHours)} /></Grid>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><KPI title="Login Hours" value={Math.round(loginHours)} /></Grid>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><KPI title="Absence Hours" value={Math.round(actualAbsenceHours)} /></Grid>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><KPI title="Variance" value={Math.round(loginHours - requiredHours)} /></Grid>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><KPI title="Capability %" value={`${capability.toFixed(1)}%`} showCatIcon /></Grid>
       </Grid>
 
-      <WeekCalendarSelector weeks={calendarWeeks} selectedIndices={selectedWeekIndices} onSelect={selectWeek} onSelectAll={() => setSelectedWeekIndices(planningCalendar.map((_, index) => index))} />
+      <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>Data quality and coverage</Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} sm={6} md={3}><Typography variant="caption" color="text.secondary">M2 source coverage</Typography><Typography variant="h6" fontWeight={800}>{history.length} weekly files</Typography></Grid>
+          <Grid item xs={12} sm={6} md={3}><Typography variant="caption" color="text.secondary">Latest week loaded</Typography><Typography variant="h6" fontWeight={800}>{latestWeek.week} {latestWeek.year}</Typography><Typography variant="caption" color="text.secondary">{formatDate(latestWeek.start)} to {formatDate(latestWeek.end)}</Typography></Grid>
+          <Grid item xs={12} sm={6} md={3}><Typography variant="caption" color="text.secondary">Duplicate weeks</Typography><Typography variant="h6" fontWeight={800} color={duplicateWeeks.length ? 'error.main' : 'success.main'}>{duplicateWeeks.length}</Typography></Grid>
+          <Grid item xs={12} sm={6} md={3}><Typography variant="caption" color="text.secondary">Missing weeks in range</Typography><Typography variant="h6" fontWeight={800} color={missingWeeks.length ? 'warning.main' : 'success.main'}>{missingWeeks.length}</Typography></Grid>
+        </Grid>
+        <Stack spacing={1} sx={{ mt: 2 }}>
+          <Alert severity="info">M2 files provide handled volume, paid login hours, and picking hours. Required hours use the current 7.3 M3/hour productivity target.</Alert>
+          <Alert severity={hasMyTimeAbsence ? 'success' : 'warning'}>{hasMyTimeAbsence ? 'MyTime absence data is loaded and used for the weekly absence trend.' : 'MyTime absence data is not loaded. Follow Up is using Settings assumptions: monthly FTE x 37.5 hours x absence, holiday, and training rates.'}</Alert>
+        </Stack>
+      </Paper>
+
+      <WeekCalendarSelector weeks={calendarWeeks} selectedIndices={selectedWeekIndices} indexOffset={fullYear ? 0 : windowStart} windowStart={fullYear ? 0 : windowStart} onSelect={selectWeek} onSelectAll={toggleFullYear} onPrevious={() => moveWindow(-1)} onNext={() => moveWindow(1)} canPrevious={!fullYear && windowStart > 0} canNext={!fullYear && windowStart < history.length - WINDOW_SIZE} fullYearSelected={fullYear} />
 
       <Box mt={3} className="table-wrap">
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>Capability Follow-Up Table ({selectedLabel})</Typography>
-        <CapabilityTable key={selectedLabel} rows={rows} />
+        <TableContainer>
+          <Table size="small" sx={{ minWidth: 980 }}>
+            <TableHead><TableRow>
+              {['Week', 'M2 handled', 'Required hours', 'Login hours', 'Absence', 'Logged hours', 'Variance', 'Capability', 'Status'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}
+            </TableRow></TableHead>
+            <TableBody>{weeklyRows.map(row => <TableRow key={`${row.week}-${row.year}`} hover>
+              <TableCell sx={{ fontWeight: 700 }}>{row.week} {row.year}</TableCell>
+              <TableCell>{Math.round(row.m3Handled).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.required).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.loginHours).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.absence).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{Math.round(row.available).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ color: row.variance < 0 ? 'error.main' : 'success.main', fontWeight: 700 }}>{Math.round(row.variance).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ fontWeight: 800 }}>{row.capability.toFixed(1)}%</TableCell>
+              <TableCell sx={{ color: row.status === 'Under' ? 'error.main' : row.status === 'Over' ? 'info.main' : 'success.main', fontWeight: 800 }}>{row.status}</TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableContainer>
       </Box>
 
       <Grid container spacing={2} mt={1}>
         <Grid item xs={12} md={6}>
           <Paper className="chart-card">
             <Typography variant="h6" sx={{ fontWeight: 700 }}>Capability Trend ({selectedLabel})</Typography>
-            <TrendChart key={`follow-up-capability-${selectedLabel}`} data={trend} />
+            <TrendChart data={trend} />
           </Paper>
         </Grid>
         <Grid item xs={12} md={6}>
           <Paper className="chart-card">
             <Typography variant="h6" sx={{ fontWeight: 700 }}>Absence Trend ({selectedLabel})</Typography>
-            <TrendChart key={`follow-up-absence-${selectedLabel}`} data={absenceTrend} type="bar" />
+            <TrendChart data={absenceTrend} type="bar" />
           </Paper>
         </Grid>
       </Grid>
@@ -72,12 +224,12 @@ export default function FollowUpPage() {
       <Grid container spacing={2} mt={1}>
         <Grid item xs={12} md={6}>
           <Paper className="chart-card">
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Weekly Absence Breakdown ({selectedLabel})</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>Weekly M2 Breakdown ({selectedLabel})</Typography>
             <Box sx={{ mt: 2 }}>
-              {absenceRows.map(item => (
-                <Stack direction="row" justifyContent="space-between" sx={{ py: 1, borderBottom: '1px solid #d0d9d5' }} key={item.absenceType}>
-                  <Typography>{item.absenceType}</Typography>
-                  <Typography>{Math.ceil(item.absenceHours)}</Typography>
+              {selectedRows.map(week => (
+                <Stack direction="row" justifyContent="space-between" sx={{ py: 1, borderBottom: '1px solid #d0d9d5' }} key={`${week.week}-${week.year}`}>
+                  <Typography>{week.week} {week.year}</Typography>
+                  <Typography>{Math.round(week.m3Handled).toLocaleString('en-GB')} m2</Typography>
                 </Stack>
               ))}
             </Box>
@@ -87,6 +239,7 @@ export default function FollowUpPage() {
           <Paper className="upload-panel">
             <Typography variant="h6" sx={{ fontWeight: 700 }}>Upload Area</Typography>
             <Stack spacing={2} mt={2}>
+              <M2HistoryUpload />
               <UploadComponent title="Actual Volume (M2)" accept=".csv,.xlsx" kind="actual-volume" />
               <UploadComponent title="Paid Hours File (MyTime)" accept=".csv,.xlsx" kind="paid-hours" />
               <UploadComponent title="Absence File (MyTime)" accept=".csv,.xlsx" kind="absence" />
@@ -94,6 +247,7 @@ export default function FollowUpPage() {
           </Paper>
         </Grid>
       </Grid>
+      {uploadedFiles.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>Uploaded files remain available for the other planning workflows.</Typography>}
     </Box>
   );
 }
