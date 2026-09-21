@@ -37,8 +37,7 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFileRecord[]>(() => (stored.uploadedFiles || []).filter(file => {
     if (file.kind !== 'stp' || !file.records.length) return true;
     const hasWeekRecords = file.records.some(record => record.weekCode !== undefined);
-    const hasAdditionalTasks = file.records.some(record => String(record.measure ?? '').startsWith('Additional '));
-    return hasWeekRecords && hasAdditionalTasks;
+    return hasWeekRecords;
   }));
   const [roleScope, setRoleScope] = useState<RoleScope>(stored.roleScope || 'both');
 

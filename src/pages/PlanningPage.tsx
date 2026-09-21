@@ -7,6 +7,7 @@ import TrendChart from '../components/TrendChart';
 import UploadComponent from '../components/UploadComponent';
 import { usePlannerContext } from '../context/PlannerContext';
 import { buildPlanningSnapshot, buildPlanningCapabilityRows, buildPlanningTrendData, buildPlanningAbsenceBreakdown, buildPlanningAbsenceTrendData, filterPlanningWeeks, planningWeekLabels } from '../services/analytics';
+import { buildForecastClassificationSummary } from '../services/stpMappingService';
 
 export default function PlanningPage() {
   const { scopedUploadedFiles: uploadedFiles, roles } = usePlannerContext();
@@ -50,6 +51,10 @@ export default function PlanningPage() {
   const selectedScheduled = selectedWeeks.reduce((sum, week) => sum + Number.parseFloat(week.sch.replace('h', '')), 0) || planning.scheduledHours;
   const selectedCapability = selectedRequired > 0 ? (selectedScheduled / selectedRequired) * 100 : planning.capability;
   const selectedWeekLabel = allWeeksSelected ? 'All 8 weeks' : selectedWeeks.map(week => week.week).join(', ');
+  const forecastWeekCodes = allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`);
+  const forecastSummary = buildForecastClassificationSummary(uploadedFiles, true, forecastWeekCodes);
+  const landTotal = forecastSummary.landDc + forecastSummary.landTransit;
+  const oceanTotal = forecastSummary.oceanDc + forecastSummary.oceanTransit;
 
   const selectWeek = (index: number, event: React.MouseEvent) => {
     if (event.ctrlKey || event.metaKey) {
@@ -70,6 +75,22 @@ export default function PlanningPage() {
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Variance" value={Math.round(selectedScheduled - selectedRequired)} subtitle="Hours" /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(selectedCapability * 10) / 10}%`} subtitle="Forecast" /></Grid>
       </Grid>
+
+      <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 800 }}>Forecast Weekly View</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Forecast STP volumes classified from the uploaded workbook. Values are shown in m3.</Typography>
+        <Grid container spacing={2}>
+          {[
+            ['Inbound DC', forecastSummary.inboundDc],
+            ['Inbound Transit', forecastSummary.inboundTransit],
+            ['Outbound DC', forecastSummary.outboundDc],
+            ['Outbound Transit', forecastSummary.outboundTransit],
+            ['Land total', landTotal],
+            ['Ocean total', oceanTotal]
+          ].map(([label, value]) => <Grid item xs={12} sm={6} md={2} key={label as string}><Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography variant="h6" fontWeight={800}>{Math.round(value as number).toLocaleString('en-GB')}</Typography></Paper></Grid>)}
+        </Grid>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>Land split: DC {Math.round(forecastSummary.landDc).toLocaleString('en-GB')} m3, Transit {Math.round(forecastSummary.landTransit).toLocaleString('en-GB')} m3. Ocean split: DC {Math.round(forecastSummary.oceanDc).toLocaleString('en-GB')} m3, Transit {Math.round(forecastSummary.oceanTransit).toLocaleString('en-GB')} m3.</Typography>
+      </Paper>
 
       <Box className="calendar-section" sx={{ mt: 3, mb: 3, background: '#fff', borderRadius: 3, border: '1px solid #dceaff', boxShadow: '0 8px 20px rgba(25,72,140,0.06)', p: 2, overflow: 'hidden' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 2 }}>

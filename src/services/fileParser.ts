@@ -368,7 +368,7 @@ function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadK
   if (kind === 'stp') {
     const forecastByWeek = new Map<string, string>();
     for (const row of rows) {
-      const measure = String(row.DC_Summary_Measures ?? row.dcsummarymeasures ?? '').trim();
+      const measure = String(row.DC_Summary_Measures ?? row['DC Summary Measures'] ?? row.dcsummarymeasures ?? row.__EMPTY ?? '').trim();
       if (normalizeHeader(measure) !== 'forecastflag') continue;
       for (const [key, value] of Object.entries(row)) {
         if (/^20\d{4}$/.test(key)) forecastByWeek.set(key, String(value ?? '').trim());
@@ -376,7 +376,7 @@ function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadK
     }
 
     for (const row of rows) {
-      const measure = String(row.DC_Summary_Measures ?? row.dcsummarymeasures ?? '').trim();
+      const measure = String(row.DC_Summary_Measures ?? row['DC Summary Measures'] ?? row.dcsummarymeasures ?? row.__EMPTY ?? '').trim();
       const roleFromMeasure = reverseStpRoleLookup.get(normalizeMeasure(measure));
       const isTotalHandlingQueueCorrected = normalizeMeasure(measure) === normalizeMeasure('Total Handling (Queue Corrected)');
       for (const [weekCode, value] of Object.entries(row)) {

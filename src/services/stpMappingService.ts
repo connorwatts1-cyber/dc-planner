@@ -25,6 +25,17 @@ export interface StpDemandPlan {
   missingMappings?: MissingStpMappingError[];
 }
 
+export interface ForecastClassificationSummary {
+  inboundDc: number;
+  inboundTransit: number;
+  outboundDc: number;
+  outboundTransit: number;
+  landDc: number;
+  landTransit: number;
+  oceanDc: number;
+  oceanTransit: number;
+}
+
 export const stpRoleMappingConfig: StpRoleMappingConfig = {
   Bayclearing: ['Additional Bay Clear Queue Corrected'],
   Replens: ['DC Replenishment and Other Inflow', 'DC Replenishment Volume', 'Replenishment', 'Additional Replenishment Queue Corrected'],
@@ -56,6 +67,87 @@ function normalizeHeader(name: string): string {
 
 function normalizeMeasure(name: string): string {
   return normalizeHeader(name).replace(/(actual|forecast|fcst)$/, '');
+}
+
+function forecastMeasureText(record: UploadedFileRecord['records'][number]): string {
+  return String(record.measure ?? record.dcsummarymeasures ?? record['DC_Summary_Measures'] ?? record['DC Summary Measures'] ?? record.__EMPTY ?? record.Measure ?? '').toLowerCase();
+}
+
+function isActualRecord(record: UploadedFileRecord['records'][number]): boolean {
+  const flag = String(record.forecastFlag ?? '').toLowerCase();
+  const measure = forecastMeasureText(record);
+  return flag.includes('actual') || flag === 'act' || measure.includes('actual');
+}
+
+function measureVolume(record: UploadedFileRecord['records'][number]): number {
+  return toNumber(record.volume ?? record.m3 ?? record.m2 ?? record.actualVolume ?? 0);
+}
+
+export function buildForecastClassificationSummary(files: UploadedFileRecord[], forecastOnly = true, selectedWeekCodes?: string[]): ForecastClassificationSummary {
+  const summary: ForecastClassificationSummary = { inboundDc: 0, inboundTransit: 0, outboundDc: 0, outboundTransit: 0, landDc: 0, landTransit: 0, oceanDc: 0, oceanTransit: 0 };
+  const records = files.filter(file => file.kind === 'stp').flatMap(file => file.records);
+  const matchingWeekRecords = selectedWeekCodes?.length
+    ? records.filter(record => selectedWeekCodes.includes(String(record.weekCode ?? record.week ?? '')))
+    : records;
+  const sourceRecords = matchingWeekRecords.length ? matchingWeekRecords : records;
+  const preferredRecords = new Map<string, UploadedFileRecord['records'][number]>();
+  sourceRecords.forEach(record => {
+    const measure = forecastMeasureText(record);
+    const week = String(record.weekCode ?? record.week ?? 'all');
+    if (!measure || measureVolume(record) <= 0) return;
+    const key = `${normalizeMeasure(measure)}|${week}`;
+    const current = preferredRecords.get(key);
+    if (!current || (isActualRecord(current) && !isActualRecord(record))) preferredRecords.set(key, record);
+  });
+  const recordsToSummarize = Array.from(preferredRecords.values());
+  const landOceanActuals = new Map<string, Array<{ week: string; value: number }>>();
+  const landOceanForecasts = new Set<string>();
+
+  recordsToSummarize.forEach(record => {
+    const measure = forecastMeasureText(record);
+    const normalizedMeasure = normalizeMeasure(measure);
+    const role = normalizeRoleKey(String(record.role ?? ''));
+    const volume = measureVolume(record);
+    if (volume <= 0) return;
+    const isLandOrOcean = normalizedMeasure.includes('landvolumedcstock')
+      || normalizedMeasure.includes('landvolumetransit')
+      || normalizedMeasure.includes('oceanvolumedcstock')
+      || normalizedMeasure.includes('oceanvolumetransit');
+    if (isLandOrOcean) {
+      if (isActualRecord(record)) {
+        const values = landOceanActuals.get(normalizedMeasure) ?? [];
+        values.push({ week: String(record.weekCode ?? record.week ?? 'all'), value: volume });
+        landOceanActuals.set(normalizedMeasure, values);
+      } else {
+        landOceanForecasts.add(normalizedMeasure);
+        if (normalizedMeasure.includes('landvolumedcstock')) summary.landDc += volume;
+        else if (normalizedMeasure.includes('landvolumetransit')) summary.landTransit += volume;
+        else if (normalizedMeasure.includes('oceanvolumedcstock')) summary.oceanDc += volume;
+        else if (normalizedMeasure.includes('oceanvolumetransit')) summary.oceanTransit += volume;
+      }
+      return;
+    }
+    if (normalizedMeasure.includes('landvolumedcstock')) summary.landDc += volume;
+    else if (normalizedMeasure.includes('landvolumetransit')) summary.landTransit += volume;
+    else if (normalizedMeasure.includes('oceanvolumedcstock')) summary.oceanDc += volume;
+    else if (normalizedMeasure.includes('oceanvolumetransit')) summary.oceanTransit += volume;
+    else if (normalizedMeasure.includes('totaltransitin') || role.includes('transittipping')) summary.inboundTransit += volume;
+    else if (normalizedMeasure.includes('totaldcintostock') || role.includes('dctipping')) summary.inboundDc += volume;
+    else if (normalizedMeasure.includes('totaldcouttransit') || role.includes('transitloading')) summary.outboundTransit += volume;
+    else if (normalizedMeasure.includes('totaldcoutfromstock') || role.includes('dcloading')) summary.outboundDc += volume;
+  });
+
+  landOceanActuals.forEach((values, measure) => {
+    if (landOceanForecasts.has(measure)) return;
+    const trendValues = values.slice().sort((left, right) => left.week.localeCompare(right.week)).slice(-4);
+    const trendAverage = trendValues.reduce((total, item) => total + item.value, 0) / Math.max(trendValues.length, 1);
+    if (measure.includes('landvolumedcstock')) summary.landDc += trendAverage;
+    else if (measure.includes('landvolumetransit')) summary.landTransit += trendAverage;
+    else if (measure.includes('oceanvolumedcstock')) summary.oceanDc += trendAverage;
+    else if (measure.includes('oceanvolumetransit')) summary.oceanTransit += trendAverage;
+  });
+
+  return summary;
 }
 
 function normalizeRoleKey(role: string): string {
