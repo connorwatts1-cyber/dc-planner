@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useMemo, useState, useEffect } from 'react';
 import { roleDefaults, resourceMapping, capabilityMetrics, trendData, absenceData, scenarioData, exportMetrics } from '../mockData';
-import { Role, ResourceMapping, ScenarioData, CapabilityMetric, LabourData, AbsenceData, ExportMetrics, UploadedFileRecord, MonthlyResourceMapping, UploadKind } from '../types';
+import { Role, ResourceMapping, ScenarioData, CapabilityMetric, LabourData, AbsenceData, ExportMetrics, UploadedFileRecord, MonthlyResourceMapping, OperationalShift, UploadKind } from '../types';
 import { loadState, saveState } from '../storage';
-import { filterFilesByRoleScope, RoleScope } from '../services/analytics';
+import { filterFilesByDcCdcScope, filterFilesByRoleScope, DcCdcScope, RoleScope } from '../services/analytics';
 
 interface PlannerContextValue {
   roles: Role[];
@@ -16,12 +16,15 @@ interface PlannerContextValue {
   scopedUploadedFiles: UploadedFileRecord[];
   roleScope: RoleScope;
   setRoleScope: (scope: RoleScope) => void;
+  dcCdcScope: DcCdcScope;
+  setDcCdcScope: (scope: DcCdcScope) => void;
   themeMode: 'light' | 'dark';
   setThemeMode: (mode: 'light' | 'dark') => void;
   updateRole: (id: string, updates: Partial<Role>) => void;
   addRole: () => void;
   deleteRole: (id: string) => void;
   updateResourceMapping: (key: keyof ResourceMapping, value: number) => void;
+  updateShiftDemandProfile: (day: string, shift: OperationalShift, value: number) => void;
   updateMonthlyResourceMapping: (month: string, key: keyof MonthlyResourceMapping, value: number) => void;
   addUploadedFile: (item: UploadedFileRecord) => void;
   clearUploadedFiles: (kind?: UploadKind) => void;
@@ -30,7 +33,7 @@ interface PlannerContextValue {
 const PlannerContext = createContext<PlannerContextValue | undefined>(undefined);
 
 export function PlannerProvider({ children }: { children: React.ReactNode }) {
-  const stored = loadState();
+  const [stored] = useState(() => loadState());
   const [roles, setRoles] = useState<Role[]>(stored.roles.length ? stored.roles : roleDefaults);
   const [resourceMappingState, setResourceMappingState] = useState<ResourceMapping>(stored.resourceMapping || resourceMapping);
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(stored.themeMode || 'light');
@@ -39,11 +42,14 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
     const hasWeekRecords = file.records.some(record => record.weekCode !== undefined);
     return hasWeekRecords;
   }));
-  const [roleScope, setRoleScope] = useState<RoleScope>(stored.roleScope || 'both');
+  const legacyDcCdcScope = stored.roleScope === 'dc' || stored.roleScope === 'cdc' ? stored.roleScope : undefined;
+  const storedRoleScope: RoleScope = stored.roleScope === 'ops' || stored.roleScope === 'non-ops' || stored.roleScope === 'both' ? stored.roleScope : 'both';
+  const [roleScope, setRoleScope] = useState<RoleScope>(legacyDcCdcScope ? 'both' : storedRoleScope);
+  const [dcCdcScope, setDcCdcScope] = useState<DcCdcScope>(stored.dcCdcScope || legacyDcCdcScope || 'both');
 
   useEffect(() => {
-    saveState({ roles, resourceMapping: resourceMappingState, themeMode, roleScope, uploadedFiles });
-  }, [roles, resourceMappingState, themeMode, roleScope, uploadedFiles]);
+    saveState({ roles, resourceMapping: resourceMappingState, themeMode, roleScope, dcCdcScope, uploadedFiles });
+  }, [roles, resourceMappingState, themeMode, roleScope, dcCdcScope, uploadedFiles]);
 
   const updateRole = (id: string, updates: Partial<Role>) => {
     setRoles(current => current.map(role => role.id === id ? { ...role, ...updates } : role));
@@ -69,6 +75,16 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
 
   const updateResourceMapping = (key: keyof ResourceMapping, value: number) => {
     setResourceMappingState(current => ({ ...current, [key]: value }));
+  };
+
+  const updateShiftDemandProfile = (day: string, shift: OperationalShift, value: number) => {
+    setResourceMappingState(current => ({
+      ...current,
+      shiftDemandProfiles: {
+        ...current.shiftDemandProfiles,
+        [day]: { ...current.shiftDemandProfiles[day], [shift]: Math.max(value, 0) }
+      }
+    }));
   };
 
   const updateMonthlyResourceMapping = (month: string, key: keyof MonthlyResourceMapping, value: number) => {
@@ -101,7 +117,7 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
     setUploadedFiles(current => kind ? current.filter(file => file.kind !== kind) : []);
   };
 
-  const scopedUploadedFiles = useMemo(() => filterFilesByRoleScope(uploadedFiles, roles, roleScope), [uploadedFiles, roles, roleScope]);
+  const scopedUploadedFiles = useMemo(() => filterFilesByDcCdcScope(filterFilesByRoleScope(uploadedFiles, roles, roleScope), dcCdcScope), [uploadedFiles, roles, roleScope, dcCdcScope]);
 
   const value = useMemo(() => ({
     roles,
@@ -115,12 +131,15 @@ export function PlannerProvider({ children }: { children: React.ReactNode }) {
     scopedUploadedFiles,
     roleScope,
     setRoleScope,
+    dcCdcScope,
+    setDcCdcScope,
     themeMode,
     setThemeMode,
     updateRole,
     addRole,
     deleteRole,
     updateResourceMapping,
+    updateShiftDemandProfile,
     updateMonthlyResourceMapping,
     addUploadedFile,
     clearUploadedFiles

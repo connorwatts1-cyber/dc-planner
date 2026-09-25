@@ -60,16 +60,16 @@ export default function ScenarioPage() {
   const [outboundAdjustmentPercent, setOutboundAdjustmentPercent] = useState(0);
   const allWeeksSelected = selectedWeekIndices.length === planningCalendar.length;
   const analyticsWeekIndex = allWeeksSelected ? null : selectedWeekIndices;
-  const planning = buildPlanningSnapshot(uploadedFiles, roles, analyticsWeekIndex);
-  const tableRows = buildPlanningCapabilityRows(uploadedFiles, roles, analyticsWeekIndex);
-  const trendData = filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex), selectedWeekIndices);
+  const planning = buildPlanningSnapshot(uploadedFiles, roles, analyticsWeekIndex, resourceMapping);
+  const tableRows = buildPlanningCapabilityRows(uploadedFiles, roles, analyticsWeekIndex, resourceMapping);
+  const trendData = filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex, resourceMapping), selectedWeekIndices);
   const stpDemand = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`));
   const stpInboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Tipping' || row.role === 'Transit Tipping').reduce((total, row) => total + row.volume, 0);
   const stpOutboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Loading' || row.role === 'Transit Loading').reduce((total, row) => total + row.volume, 0);
   const truckVolumeAssumption = Math.max(resourceMapping.truckVolumeM3, 0.01);
   const estimatedInboundTrucks = Math.ceil(stpInboundVolume / truckVolumeAssumption);
   const estimatedOutboundTrucks = Math.ceil(stpOutboundVolume / truckVolumeAssumption);
-  const calendarTrend = buildPlanningTrendData(uploadedFiles, roles, null);
+  const calendarTrend = buildPlanningTrendData(uploadedFiles, roles, null, resourceMapping);
   const calendarWeeks = planningCalendar.map((fallback, index) => {
     const actual = calendarTrend[index];
     if (!actual) return fallback;

@@ -1,4 +1,4 @@
-import { AbsenceData, CapabilityMetric, ExportMetrics, LabourData, MtpMonthData, ResourceMapping, Role, ScenarioData } from './types';
+import { AbsenceData, CapabilityMetric, defaultDemandStreamProfiles, defaultShiftDemandProfiles, ExportMetrics, LabourData, MtpMonthData, ResourceMapping, Role, ScenarioData } from './types';
 
 export const mtpMonths: MtpMonthData[] = [
   { month: 'September', weeksIncluded: 217835, inboundVolume: 101342, outflowVolume: 99109, totalHandlingVolume: 200451, averageWeeklyVolume: 46294, operationalHoursNeed: 19385, fteForFp: 127, fteForPick: 8, fteDevelopment: 3, fteSickness: 21, fteHolidays: 14, totalFteNeed: 173 },
@@ -16,26 +16,41 @@ export const mtpMonths: MtpMonthData[] = [
 ];
 
 export const roleDefaults: Role[] = [
+  { id: 'manager', role: 'Manager', translation: 'Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'team-leader', role: 'Team Leader', translation: 'Team Leader', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'pcmanager', role: 'pcmanager', translation: 'PC Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'staffchief', role: 'staffchief', translation: 'Staff Chief', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'training', role: 'training', translation: 'Training', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'facility', role: 'Facility', translation: 'Facility', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'supply-quality', role: 'Supply Quality', translation: 'Supply Quality', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'pc-generalist', role: 'P&C Generalist', translation: 'P&C Generalist', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'coordinator', role: 'Coordinator', translation: 'Coordinator', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'ikea-food-manager', role: 'IKEA Food Manager', translation: 'IKEA Food Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'if-kitchen-manager', role: 'IF Kitchen Manager', translation: 'IF Kitchen Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'serving', role: 'Serving', translation: 'Serving', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'invent', role: 'Invent', translation: 'Invent', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'pc-manager', role: 'P&C Manager', translation: 'P&C Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: 'staff-chef', role: 'Staff Chef', translation: 'Staff Chef', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
   { id: '1', role: 'Banding', translation: 'Banding', palletsPerHour: 43.1, m3PerPallet: 0.82, baselineValue: 35.34, type: 'Operational' },
-  { id: '2', role: 'Bayclearing', translation: 'Bayclearing', palletsPerHour: 35, m3PerPallet: 0.82, baselineValue: 28.7, type: 'Operational' },
+  { id: '2', role: 'Bayclearing', translation: 'Bayclearing', palletsPerHour: 35, m3PerPallet: 0.82, baselineValue: 35, type: 'Operational' },
   { id: '3', role: 'Booking Office', translation: 'Booking Office', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Non-Ops' },
   { id: '4', role: 'Co-Worker', translation: 'Co-Worker', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
   { id: '5', role: 'Cycles', translation: 'Cycles', palletsPerHour: 17, m3PerPallet: 0.82, baselineValue: 13.94, type: 'Operational' },
-  { id: '6', role: 'DC Loading', translation: 'DC Loading', palletsPerHour: 42, m3PerPallet: 0.82, baselineValue: 34.44, type: 'Operational' },
-  { id: '7', role: 'DC Tipping', translation: 'DC Tipping', palletsPerHour: 40, m3PerPallet: 0.82, baselineValue: 32.8, type: 'Operational' },
+  { id: '6', role: 'DC Loading', translation: 'DC Loading', palletsPerHour: 42, m3PerPallet: 0.82, baselineValue: 42, type: 'Operational' },
+  { id: '7', role: 'DC Tipping', translation: 'DC Tipping', palletsPerHour: 40, m3PerPallet: 0.82, baselineValue: 40, type: 'Operational' },
   { id: '8', role: 'Gatekeeper', translation: 'Gatekeeper', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
-  { id: '9', role: 'Mats', translation: 'Mats', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Operational' },
-  { id: '10', role: 'MCT', translation: 'MCT', palletsPerHour: 0, m3PerPallet: 1, baselineValue: 0, type: 'Operational' },
+  { id: '9', role: 'Mats', translation: 'Mats', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+  { id: '10', role: 'MCT', translation: 'MCT', palletsPerHour: 0, m3PerPallet: 1, baselineValue: 0, type: 'Non-Ops' },
   { id: '11', role: 'CB Palletless', translation: 'CB Palletless', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Operational' },
-  { id: '12', role: 'Picking', translation: 'Picking', palletsPerHour: 22.5, m3PerPallet: 1, baselineValue: 24.5, type: 'Operational' },
+  { id: '12', role: 'Picking', translation: 'Picking', palletsPerHour: 22.5, m3PerPallet: 1, baselineValue: 109.8, type: 'Operational' },
   { id: '13', role: 'Recovery', translation: 'Recovery', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
-  { id: '14', role: 'Replens', translation: 'Replenishment', palletsPerHour: 10.5, m3PerPallet: 1, baselineValue: 10.5, type: 'Operational' },
+  { id: '14', role: 'Replens', translation: 'Replenishment', palletsPerHour: 10.5, m3PerPallet: 0.82, baselineValue: 10.5, demandPercent: 0.37, type: 'Operational' },
   { id: '15', role: 'Shunting', translation: 'Shunting', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
   { id: '16', role: 'Transit Cycle', translation: 'Transit Cycle', palletsPerHour: 29.5, m3PerPallet: 0.82, baselineValue: 24.19, type: 'Operational' },
   { id: '17', role: 'Transit Transfer', translation: 'Transit Transfer', palletsPerHour: 29.5, m3PerPallet: 0.82, baselineValue: 24.19, type: 'Operational' },
-  { id: '18', role: 'Transit Tip', translation: 'Transit Tip', palletsPerHour: 34, m3PerPallet: 0.82, baselineValue: 27.88, type: 'Operational' },
-  { id: '19', role: 'Transit Bay', translation: 'Transit Bayclearing', palletsPerHour: 27, m3PerPallet: 0.82, baselineValue: 22.14, type: 'Operational' },
-  { id: '20', role: 'Transit Load', translation: 'Transit Loading', palletsPerHour: 43, m3PerPallet: 0.82, baselineValue: 35.26, type: 'Operational' },
+  { id: '18', role: 'Transit Tip', translation: 'Transit Tip', palletsPerHour: 34, m3PerPallet: 0.82, baselineValue: 34, type: 'Operational' },
+  { id: '19', role: 'Transit Bay', translation: 'Transit Bayclearing', palletsPerHour: 27, m3PerPallet: 0.82, baselineValue: 27, type: 'Operational' },
+  { id: '20', role: 'Transit Load', translation: 'Transit Loading', palletsPerHour: 43, m3PerPallet: 0.82, baselineValue: 43, type: 'Operational' },
   { id: '21', role: 'Tram Plock', translation: 'Tram Plock', palletsPerHour: 27, m3PerPallet: 1, baselineValue: 27, type: 'Operational' }
 ];
 
@@ -69,7 +84,13 @@ export const resourceMapping: ResourceMapping = {
   fte: 206,
   leavers: 1.5,
   truckVolumeM3: 60,
+  m3PerPallet: 0.82,
   productivityTargetM3PerHour: 7.3,
+  breakMinutesPerShift: 45,
+  productiveHoursPerShift: 6.5,
+  directTaskAvailability: 0.9,
+  shiftDemandProfiles: defaultShiftDemandProfiles(),
+  demandStreamProfiles: defaultDemandStreamProfiles(),
   monthValues: {
     September: { absence: 0.10, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
     October: { absence: 0.10, holiday: 0.08, training: 0.02, fte: 204, leavers: 1.5 },

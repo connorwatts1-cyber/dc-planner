@@ -3,7 +3,8 @@ import { Alert, Box, Grid, Paper, Stack, Table, TableBody, TableCell, TableConta
 import PageHeader from '../components/PageHeader';
 import KPI from '../components/KPI';
 import TrendChart from '../components/TrendChart';
-import UploadComponent from '../components/UploadComponent';
+import { parseUploadedFile } from '../services/fileParser';
+import { productiveScheduledHours } from '../services/analytics';
 import { usePlannerContext } from '../context/PlannerContext';
 import WeekCalendarSelector, { PlanningCalendarWeek } from '../components/WeekCalendarSelector';
 import { historicalFollowUpWeeks } from '../historicalFollowUpData';
@@ -23,6 +24,27 @@ function uploadedHistory(records: Array<Record<string, string | number>>) {
     loginHours: Number(record.loginHours ?? record.paidHours ?? 0),
     pickingHours: Number(record.pickingHours ?? 0)
   })).filter(row => row.week && row.start && row.m3Handled > 0).sort((left, right) => left.start.localeCompare(right.start));
+}
+
+function compactAbsenceRecords(records: Array<Record<string, string | number>>) {
+  const grouped = new Map<string, Record<string, string | number>>();
+  records.forEach(record => {
+    const date = String(record.date ?? record.absenceDate ?? '');
+    const type = String(record.absenceType ?? record.type ?? 'Other');
+    const week = String(record.weekCode ?? record.week ?? (date ? weekKey(date) : ''));
+    const hours = Number(record.absenceHours ?? record.hours ?? 0);
+    if (!week || hours <= 0) return;
+    const key = `${week}|${type}`;
+    const existing = grouped.get(key);
+    grouped.set(key, {
+      date: existing?.date ?? date,
+      weekCode: week,
+      absenceType: type,
+      absenceHours: Number(existing?.absenceHours ?? 0) + hours,
+      hours: Number(existing?.hours ?? 0) + hours
+    });
+  });
+  return Array.from(grouped.values());
 }
 
 function uploadedMtpMonths(records: Array<Record<string, string | number>>): MtpMonthData[] {
@@ -48,7 +70,11 @@ function formatDate(value: string) {
 }
 
 function weekKey(value: string) {
-  const date = new Date(`${value}T00:00:00`);
+  const raw = String(value ?? '').trim();
+  const ukDate = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  const date = ukDate
+    ? new Date(`${ukDate[3]}-${String(ukDate[2]).padStart(2, '0')}-${String(ukDate[1]).padStart(2, '0')}T00:00:00`)
+    : new Date(`${raw}T00:00:00`);
   const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const day = utcDate.getUTCDay() || 7;
   utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
@@ -72,12 +98,37 @@ function toCalendarWeek(week: typeof historicalFollowUpWeeks[number], targetM3Pe
 }
 
 export default function FollowUpPage() {
-  const { uploadedFiles, resourceMapping, roles } = usePlannerContext();
+  const { uploadedFiles, resourceMapping, roles, addUploadedFile } = usePlannerContext();
+  useEffect(() => {
+    const existingAbsence = uploadedFiles.find(file => file.kind === 'absence' && file.status === 'parsed');
+    if (existingAbsence && existingAbsence.records.length > 500) {
+      const compacted = compactAbsenceRecords(existingAbsence.records);
+      if (compacted.length < existingAbsence.records.length) {
+        addUploadedFile({ ...existingAbsence, fileName: `${existingAbsence.fileName} (weekly summary)`, records: compacted, message: `Compacted ${existingAbsence.records.length} rows into ${compacted.length} weekly absence summaries.` });
+        return;
+      }
+    }
+    if (uploadedFiles.some(file => file.kind === 'absence' && file.fileName.includes('Absence (2).xls'))) return;
+    fetch(`${import.meta.env.BASE_URL}Absence%20(2).xls`)
+      .then(response => response.ok ? response.blob() : Promise.reject(new Error('Historical absence file unavailable')))
+      .then(blob => parseUploadedFile(new File([blob], 'Absence (2).xls'), 'absence'))
+      .then(parsed => {
+        if (parsed.status !== 'parsed') return;
+        const existingRecords = uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records);
+        addUploadedFile({
+          ...parsed,
+          fileName: existingRecords.length ? `Uploaded absence + ${parsed.fileName}` : parsed.fileName,
+          records: [...existingRecords, ...parsed.records],
+          message: existingRecords.length ? `Merged ${existingRecords.length + parsed.records.length} absence records from uploaded and historical MyTime files.` : parsed.message
+        });
+      })
+      .catch(() => undefined);
+  }, [uploadedFiles, addUploadedFile]);
   const targetM3PerHour = Math.max(resourceMapping.productivityTargetM3PerHour, 0.1);
   const m2Upload = uploadedFiles.find(file => file.kind === 'm2-history' && file.status === 'parsed');
   const mtpUpload = uploadedFiles.find(file => file.kind === 'mtp' && file.status === 'parsed');
   const mtpMonths = mtpUpload ? uploadedMtpMonths(mtpUpload.records) : [];
-  const history = m2Upload ? uploadedHistory(m2Upload.records) : historicalFollowUpWeeks;
+  const history = useMemo(() => m2Upload ? uploadedHistory(m2Upload.records) : historicalFollowUpWeeks, [m2Upload]);
   const [windowStart, setWindowStart] = useState(Math.max(history.length - WINDOW_SIZE, 0));
   const [fullYear, setFullYear] = useState(false);
   const [selectedWeekIndices, setSelectedWeekIndices] = useState<number[]>(() => history.slice(-WINDOW_SIZE).map((_, index) => history.length - WINDOW_SIZE + index));
@@ -89,13 +140,23 @@ export default function FollowUpPage() {
   }, [m2Upload?.importedAt]);
   const visibleWeeks = fullYear ? history : history.slice(windowStart, windowStart + WINDOW_SIZE);
   const selectedWeeks = history.filter((_, index) => selectedWeekIndices.includes(index));
+  const historyWeekKeyForDate = (value: string) => {
+    const raw = String(value ?? '').trim();
+    const ukDate = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+    const normalized = ukDate
+      ? `${ukDate[3]}-${String(ukDate[2]).padStart(2, '0')}-${String(ukDate[1]).padStart(2, '0')}`
+      : raw.slice(0, 10);
+    const date = new Date(`${normalized}T00:00:00`);
+    const matchingWeek = history.find(week => date >= new Date(`${week.start}T00:00:00`) && date <= new Date(`${week.end}T00:00:00`));
+    return matchingWeek ? `${matchingWeek.year}-${matchingWeek.week}` : weekKey(value);
+  };
   const selectedLabel = fullYear ? 'Full year' : selectedWeeks.length === 1 ? `${selectedWeeks[0].week} ${selectedWeeks[0].year}` : `${selectedWeeks.length} selected weeks`;
   const calendarWeeks = useMemo(() => visibleWeeks.map(week => toCalendarWeek(week, targetM3PerHour)), [visibleWeeks, targetM3PerHour]);
   const selectedRows = selectedWeeks.length ? selectedWeeks : visibleWeeks;
   const requiredHours = selectedRows.reduce((sum, week) => sum + week.m3Handled / targetM3PerHour, 0);
   const loginHours = selectedRows.reduce((sum, week) => sum + week.loginHours, 0);
   const actualVolume = selectedRows.reduce((sum, week) => sum + week.m3Handled, 0);
-  const hasMyTimeAbsence = uploadedFiles.some(file => file.kind === 'absence' && file.status === 'parsed' && file.records.length > 0);
+  const hasMyTimeAbsence = useMemo(() => uploadedFiles.some(file => file.kind === 'absence' && file.status === 'parsed' && file.records.length > 0), [uploadedFiles]);
   const estimateAbsence = (week: typeof history[number]) => {
     const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
     const assumptions = resourceMapping.monthValues?.[month] ?? resourceMapping;
@@ -107,15 +168,20 @@ export default function FollowUpPage() {
       training: weeklyHours * (assumptions.training ?? resourceMapping.training)
     };
   };
-  const actualAbsenceByWeek = new Map<string, number>();
-  uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
-    const date = String(record.date ?? record.absenceDate ?? '');
-    const key = String(record.weekCode ?? record.week ?? (date ? weekKey(date) : ''));
-    const hours = Number(record.absenceHours ?? record.hours ?? 0);
-    if (key && hours > 0) actualAbsenceByWeek.set(key, (actualAbsenceByWeek.get(key) ?? 0) + hours);
-  });
+  const actualAbsenceByWeek = useMemo(() => {
+    const values = new Map<string, number>();
+    uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
+      const date = String(record.date ?? record.absenceDate ?? '');
+      const key = String(record.weekCode ?? record.week ?? (date ? historyWeekKeyForDate(date) : ''));
+      const hours = Number(record.absenceHours ?? record.hours ?? 0);
+      if (key && hours > 0) values.set(key, (values.get(key) ?? 0) + hours);
+    });
+    return values;
+  }, [uploadedFiles, history]);
   const absenceHoursForWeek = (week: typeof history[number]) => hasMyTimeAbsence
-    ? actualAbsenceByWeek.get(`${week.year}-${week.week}`) ?? 0
+    ? actualAbsenceByWeek.has(`${week.year}-${week.week}`)
+      ? actualAbsenceByWeek.get(`${week.year}-${week.week}`) ?? 0
+      : (() => { const estimate = estimateAbsence(week); return estimate.sickness + estimate.holiday + estimate.training; })()
     : (() => { const estimate = estimateAbsence(week); return estimate.sickness + estimate.holiday + estimate.training; })();
   const actualAbsenceHours = selectedRows.reduce((sum, week) => {
     return sum + absenceHoursForWeek(week);
@@ -125,28 +191,31 @@ export default function FollowUpPage() {
     const required = week.m3Handled / targetM3PerHour;
     return { date: week.week, requiredHours: required, scheduledHours: week.loginHours, variance: week.loginHours - required, capability: week.loginHours / Math.max(required, 1) * 100, gap: Math.max(required - week.loginHours, 0) };
   });
-  const weeklyRows = selectedRows.map(week => {
+  const weeklyRows = useMemo(() => selectedRows.map(week => {
     const required = week.m3Handled / targetM3PerHour;
     const absence = absenceHoursForWeek(week);
     const weeklyCapability = week.loginHours / Math.max(required, 1) * 100;
     return { ...week, required, absence, available: week.loginHours, variance: week.loginHours - required, capability: weeklyCapability, status: weeklyCapability < 90 ? 'Under' : weeklyCapability > 110 ? 'Over' : 'Optimal' };
-  });
+  }), [selectedRows, targetM3PerHour, absenceHoursForWeek]);
   const actualByWeek = new Map(selectedRows.map(week => [`${week.year}-${week.week}`, week]));
-  const stpForecastRows = uploadedFiles.filter(file => file.kind === 'stp').flatMap(file => file.records);
-  const stpByWeek = new Map<string, number>();
-  stpForecastRows.forEach(record => {
-    const week = String(record.weekCode ?? record.week ?? '');
-    const volume = Number(record.volume ?? record.m3 ?? record.m2 ?? 0);
-    if (!week || volume <= 0) return;
-    stpByWeek.set(week, (stpByWeek.get(week) ?? 0) + volume);
-  });
-  const weeksByMonth = new Map<string, typeof selectedRows>();
-  selectedRows.forEach(week => {
-    const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
-    weeksByMonth.set(month, [...(weeksByMonth.get(month) ?? []), week]);
-  });
-  const mtpByMonth = new Map(mtpMonths.map(month => [month.month, month.totalHandlingVolume]));
-  const forecastVsActualRows = selectedRows.map(week => {
+  const stpByWeek = useMemo(() => {
+    const values = new Map<string, number>();
+    uploadedFiles.filter(file => file.kind === 'stp').flatMap(file => file.records).forEach(record => {
+      const week = String(record.weekCode ?? record.week ?? '');
+      const volume = Number(record.volume ?? record.m3 ?? record.m2 ?? 0);
+      if (!week || volume <= 0) return;
+      values.set(week, (values.get(week) ?? 0) + volume);
+    });
+    return values;
+  }, [uploadedFiles]);
+  const forecastVsActualRows = useMemo(() => {
+    const weeksByMonth = new Map<string, typeof selectedRows>();
+    selectedRows.forEach(week => {
+      const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
+      weeksByMonth.set(month, [...(weeksByMonth.get(month) ?? []), week]);
+    });
+    const mtpByMonth = new Map(mtpMonths.map(month => [month.month, month.totalHandlingVolume]));
+    return selectedRows.map(week => {
     const key = `${week.year}-${week.week}`;
     const month = new Intl.DateTimeFormat('en-GB', { month: 'long' }).format(new Date(`${week.start}T00:00:00`));
     const monthlyForecast = mtpByMonth.get(month);
@@ -156,20 +225,24 @@ export default function FollowUpPage() {
     const actualVolume = actualByWeek.get(key)?.m3Handled ?? 0;
     const volumeVariance = actualVolume - forecastVolume;
     const productivity = actualVolume / Math.max(week.loginHours, 1);
-    return { ...week, forecastVolume, actualVolume, volumeVariance, productivity, forecastSource: monthlyForecast !== undefined ? 'MTP' : stpByWeek.has(key) ? 'STP' : 'None' };
-  });
-  const absenceEstimates = selectedRows.map(week => ({ week, ...estimateAbsence(week) }));
-  const actualAbsenceByType = { sickness: 0, holiday: 0, training: 0 };
-  uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
-    const type = String(record.absenceType ?? record.type ?? '').toLowerCase();
-    const hours = Number(record.absenceHours ?? record.hours ?? 0);
-    const date = String(record.date ?? record.absenceDate ?? '');
-    const matchesSelectedWeek = !date || selectedRows.some(week => weekKey(date) === `${week.year}-${week.week}`);
-    if (!matchesSelectedWeek || hours <= 0) return;
-    if (type.includes('holiday')) actualAbsenceByType.holiday += hours;
-    else if (type.includes('train') || type.includes('talk')) actualAbsenceByType.training += hours;
-    else if (type.includes('sick') || type.includes('absence')) actualAbsenceByType.sickness += hours;
-  });
+      return { ...week, forecastVolume, actualVolume, volumeVariance, productivity, forecastSource: monthlyForecast !== undefined ? 'MTP' : stpByWeek.has(key) ? 'STP' : 'None' };
+    });
+  }, [selectedRows, mtpMonths, stpByWeek, actualByWeek]);
+  const absenceEstimates = useMemo(() => selectedRows.map(week => ({ week, ...estimateAbsence(week) })), [selectedRows, resourceMapping]);
+  const actualAbsenceByType = useMemo(() => {
+    const totals = { sickness: 0, holiday: 0, training: 0 };
+    uploadedFiles.filter(file => file.kind === 'absence' && file.status === 'parsed').flatMap(file => file.records).forEach(record => {
+      const type = String(record.absenceType ?? record.type ?? '').toLowerCase();
+      const hours = Number(record.absenceHours ?? record.hours ?? 0);
+      const date = String(record.date ?? record.absenceDate ?? '');
+      const matchesSelectedWeek = !date || selectedRows.some(week => historyWeekKeyForDate(date) === `${week.year}-${week.week}`);
+      if (!matchesSelectedWeek || hours <= 0) return;
+      if (type.includes('holiday')) totals.holiday += hours;
+      else if (type.includes('train') || type.includes('talk')) totals.training += hours;
+      else if (type.includes('sick') || type.includes('absence')) totals.sickness += hours;
+    });
+    return totals;
+  }, [uploadedFiles, selectedRows, history]);
   const goalHours = absenceEstimates.reduce((total, item) => ({
     sickness: total.sickness + item.sickness,
     holiday: total.holiday + item.holiday,
@@ -180,6 +253,13 @@ export default function FollowUpPage() {
     { label: 'Holiday', actual: hasMyTimeAbsence ? actualAbsenceByType.holiday : goalHours.holiday, goal: goalHours.holiday },
     { label: 'Training', actual: hasMyTimeAbsence ? actualAbsenceByType.training : goalHours.training, goal: goalHours.training }
   ].map(item => ({ ...item, variance: item.actual - item.goal, source: hasMyTimeAbsence ? 'MyTime' : 'Settings assumption' }));
+  const absencePercentageRows = [
+    { label: 'Sickness / absence', hours: hasMyTimeAbsence ? actualAbsenceByType.sickness : goalHours.sickness },
+    { label: 'Holiday', hours: hasMyTimeAbsence ? actualAbsenceByType.holiday : goalHours.holiday },
+    { label: 'Training', hours: hasMyTimeAbsence ? actualAbsenceByType.training : goalHours.training }
+  ].map(row => ({ ...row, percentage: loginHours > 0 ? row.hours / loginHours * 100 : 0 }));
+  const absenceTotalHours = absencePercentageRows.reduce((total, row) => total + row.hours, 0);
+  const absenceTotalPercentage = loginHours > 0 ? absenceTotalHours / loginHours * 100 : 0;
   const normalizedRole = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z]+/g, '');
   const nonOpsRoles = new Set(roles.filter(role => role.type === 'Non-Ops').flatMap(role => [normalizedRole(role.role), normalizedRole(role.translation)]));
   const scheduleRows = uploadedFiles.filter(file => file.kind === 'schedule' && file.status === 'parsed').flatMap(file => file.records);
@@ -189,10 +269,38 @@ export default function FollowUpPage() {
   });
   const nonOpsHours = selectedScheduleRows.reduce((total, record) => {
     const role = normalizedRole(record.role ?? record.workrole ?? record.WorkRole);
-    return total + (nonOpsRoles.has(role) ? Number(record.scheduledHours ?? record.hours ?? 0) : 0);
+    return total + (nonOpsRoles.has(role) ? productiveScheduledHours(record, resourceMapping) : 0);
   }, 0);
-  const scheduledRoleHours = selectedScheduleRows.reduce((total, record) => total + Number(record.scheduledHours ?? record.hours ?? 0), 0);
+  const scheduledRoleHours = selectedScheduleRows.reduce((total, record) => total + productiveScheduledHours(record, resourceMapping), 0);
   const nonOpsPercentage = scheduledRoleHours > 0 ? nonOpsHours / scheduledRoleHours * 100 : undefined;
+  const roleBreakdownRows = useMemo(() => {
+    const roleLabels: Record<string, string> = {
+      dctipping: 'DC Tipping',
+      dcloading: 'DC Loading',
+      transittipping: 'Transit Tipping',
+      transittip: 'Transit Tipping',
+      transitloading: 'Transit Loading',
+      transitload: 'Transit Loading',
+      bayclearing: 'Bayclearing',
+      transitbay: 'Bayclearing',
+      transitbayclearing: 'Bayclearing',
+      picking: 'Picking',
+      pick: 'Picking',
+      replenishment: 'Replens',
+      replen: 'Replens'
+    };
+    const totals = new Map<string, number>();
+    selectedScheduleRows.forEach(record => {
+      const rawRole = String(record.role ?? record.workrole ?? record.WorkRole ?? 'Unmapped role').trim();
+      const normalizedRoleName = normalizedRole(rawRole);
+      const label = roleLabels[normalizedRoleName] ?? (rawRole || 'Unmapped role');
+      const hours = productiveScheduledHours(record, resourceMapping);
+      if (hours > 0) totals.set(label, (totals.get(label) ?? 0) + hours);
+    });
+    return Array.from(totals.entries())
+      .map(([role, hours]) => ({ role, hours, percentage: scheduledRoleHours > 0 ? hours / scheduledRoleHours * 100 : 0 }))
+      .sort((left, right) => right.hours - left.hours);
+  }, [selectedScheduleRows, scheduledRoleHours, resourceMapping]);
   const absenceTrend = absenceEstimates.map(item => ({ date: item.week.week, absenceHours: hasMyTimeAbsence ? actualAbsenceByWeek.get(`${item.week.year}-${item.week.week}`) ?? 0 : item.sickness + item.holiday + item.training }));
   const weekKeys = history.map(week => `${week.year}-${week.week}`);
   const duplicateWeeks = weekKeys.filter((week, index) => weekKeys.indexOf(week) !== index);
@@ -233,7 +341,7 @@ export default function FollowUpPage() {
   };
 
   const moveWindow = (direction: number) => {
-    const nextStart = Math.min(Math.max(windowStart + direction * WINDOW_SIZE, 0), history.length - WINDOW_SIZE);
+    const nextStart = Math.min(Math.max(windowStart + direction, 0), history.length - WINDOW_SIZE);
     setWindowStart(nextStart);
     setSelectedWeekIndices(history.slice(nextStart, nextStart + WINDOW_SIZE).map((_, index) => nextStart + index));
   };
@@ -259,7 +367,7 @@ export default function FollowUpPage() {
         </Grid>
         <Stack spacing={1} sx={{ mt: 2 }}>
           <Alert severity="info">M2 files provide handled volume, paid login hours, and picking hours. Required hours use the current 7.3 M3/hour productivity target.</Alert>
-          <Alert severity={hasMyTimeAbsence ? 'success' : 'warning'}>{hasMyTimeAbsence ? 'MyTime absence data is loaded and used for the weekly absence trend.' : 'MyTime absence data is not loaded. Follow Up is using Settings assumptions: monthly FTE x 37.5 hours x absence, holiday, and training rates.'}</Alert>
+          <Alert severity={hasMyTimeAbsence ? 'success' : 'warning'}>{hasMyTimeAbsence ? 'MyTime absence data is used where covered; Settings assumptions fill weeks without historical MyTime records.' : 'MyTime absence data is not loaded. Follow Up is using Settings assumptions: monthly FTE x 37.5 hours x absence, holiday, and training rates.'}</Alert>
         </Stack>
       </Paper>
 
@@ -324,11 +432,35 @@ export default function FollowUpPage() {
 
       <Box mt={2} className="table-wrap">
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Non-Ops hours usage ({selectedLabel})</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Calculated from scheduled role hours and the Non-Ops role classifications in Settings.</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Calculated from productive scheduled role hours and the Non-Ops role classifications in Settings.</Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Non-Ops hours</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Unavailable' : Math.round(nonOpsHours).toLocaleString('en-GB')}</Typography></Grid>
           <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Total scheduled role hours</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Unavailable' : Math.round(scheduledRoleHours).toLocaleString('en-GB')}</Typography></Grid>
           <Grid item xs={12} sm={4}><Typography variant="caption" color="text.secondary">Non-Ops percentage</Typography><Typography variant="h5" fontWeight={800}>{nonOpsPercentage === undefined ? 'Upload schedule' : `${nonOpsPercentage.toFixed(1)}%`}</Typography></Grid>
+        </Grid>
+      </Box>
+
+      <Box mt={2} className="table-wrap" sx={{ overflowX: 'auto' }}>
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Role breakdown ({selectedLabel})</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Productive scheduled hours are grouped from the uploaded schedule for the selected weeks, after the Settings break deduction. Historical M2 totals do not contain role-level hours.</Typography>
+        {roleBreakdownRows.length ? <TableContainer>
+          <Table size="small" sx={{ minWidth: 620 }}>
+            <TableHead><TableRow>{['Role', 'Productive scheduled hours', '% of role hours'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+            <TableBody>{roleBreakdownRows.map(row => <TableRow key={row.role} hover>
+              <TableCell sx={{ fontWeight: 700 }}>{row.role}</TableCell>
+              <TableCell>{Math.round(row.hours).toLocaleString('en-GB')}</TableCell>
+              <TableCell>{row.percentage.toFixed(1)}%</TableCell>
+            </TableRow>)}</TableBody>
+          </Table>
+        </TableContainer> : <Alert severity="info">Upload a schedule with role and hours columns to see DC Tipping, Transit Loading, and other role-level breakdowns.</Alert>}
+      </Box>
+
+      <Box mt={2} className="table-wrap">
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Absence as % of total hours ({selectedLabel})</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Percentages use total Login Hours for the selected period. Source: {hasMyTimeAbsence ? 'MyTime where available, Settings estimates for uncovered weeks.' : 'Settings assumptions.'}</Typography>
+        <Grid container spacing={2}>
+          {absencePercentageRows.map(row => <Grid item xs={12} sm={6} md={3} key={row.label}><Paper variant="outlined" sx={{ p: 1.5, height: '100%' }}><Typography variant="caption" color="text.secondary">{row.label}</Typography><Typography variant="h5" fontWeight={800}>{row.percentage.toFixed(1)}%</Typography><Typography variant="caption">{Math.round(row.hours).toLocaleString('en-GB')} hours</Typography></Paper></Grid>)}
+          <Grid item xs={12} sm={6} md={3}><Paper variant="outlined" sx={{ p: 1.5, height: '100%', bgcolor: '#f4f7fb' }}><Typography variant="caption" color="text.secondary">Total absence-related</Typography><Typography variant="h5" fontWeight={800}>{absenceTotalPercentage.toFixed(1)}%</Typography><Typography variant="caption">{Math.round(absenceTotalHours).toLocaleString('en-GB')} hours</Typography></Paper></Grid>
         </Grid>
       </Box>
 
@@ -359,17 +491,6 @@ export default function FollowUpPage() {
                 </Stack>
               ))}
             </Box>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <Paper className="upload-panel">
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Upload Area</Typography>
-            <Stack spacing={2} mt={2}>
-              <UploadComponent title="MTP forecast workbook" accept=".xlsx,.xls" kind="mtp" />
-              <UploadComponent title="Actual Volume (M2)" accept=".csv,.xlsx" kind="actual-volume" />
-              <UploadComponent title="Paid Hours File (MyTime)" accept=".csv,.xlsx" kind="paid-hours" />
-              <UploadComponent title="Absence File (MyTime)" accept=".csv,.xlsx" kind="absence" />
-            </Stack>
           </Paper>
         </Grid>
       </Grid>

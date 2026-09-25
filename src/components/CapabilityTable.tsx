@@ -23,10 +23,10 @@ export default function CapabilityTable({ rows }: CapabilityTableProps) {
     },
     {
       field: 'targetRate',
-      headerName: 'Target Rate (m3/h)',
+      headerName: 'Target Rate',
       flex: 1,
       minWidth: 150,
-      renderCell: params => <Typography>{Number(params.value ?? 0).toFixed(1)}</Typography>
+      renderCell: params => <Typography>{Number(params.value ?? 0).toFixed(1)} {(params.row as { targetUnit?: string }).targetUnit ?? 'm3/h'}</Typography>
     },
     {
       field: 'requiredHours',

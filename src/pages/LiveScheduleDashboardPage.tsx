@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Alert, Box, Card, CardContent, Chip, Grid, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import { Alert, Box, Card, CardContent, Chip, Grid, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import PageHeader from '../components/PageHeader';
-import UploadComponent from '../components/UploadComponent';
+import { buildDailyShiftCapabilityRows } from '../services/analytics';
+import { usePlannerContext } from '../context/PlannerContext';
 
 interface DailySchedule { day: string; date: string; inboundBooked: number; forecastOutboundLoads: number; bookedOutboundLoads: number; inboundCapability: number; outboundCapability: number; cycleCapability: number; }
 
@@ -18,10 +19,22 @@ const nextWeek = currentWeek.map((row, index) => ({ ...row, date: `${27 + index}
 const capabilityColor = (value: number) => value < 90 ? 'error.main' : value > 110 ? 'info.main' : 'success.main';
 
 export default function LiveScheduleDashboardPage() {
+  const { scopedUploadedFiles, roles, resourceMapping } = usePlannerContext();
   const [period, setPeriod] = useState<'current' | 'next'>('current');
   const [selectedDay, setSelectedDay] = useState(0);
+  const [capacityShift, setCapacityShift] = useState<'AM' | 'PM' | 'Night'>('AM');
+  const [cellDisplayMode, setCellDisplayMode] = useState<'hours' | 'headcount'>('hours');
   const rows = period === 'current' ? currentWeek : nextWeek;
   const selected = rows[selectedDay] ?? rows[0];
+  const dailyShiftCapability = buildDailyShiftCapabilityRows(scopedUploadedFiles, roles, resourceMapping);
+  const latestScheduleDates = Array.from(new Set(dailyShiftCapability.map(row => row.date))).slice(-7);
+  const latestDailyShiftCapability = dailyShiftCapability.filter(row => latestScheduleDates.includes(row.date));
+  const selectedShiftRows = latestDailyShiftCapability.filter(row => row.shift === capacityShift && row.demandAvailable);
+  const selectedShiftRoles = Array.from(new Set(selectedShiftRows.map(row => row.role))).sort((left, right) => left.localeCompare(right));
+  const selectedShiftTotals = selectedShiftRows.reduce((total, row) => ({ productive: total.productive + row.productiveHours, required: total.required + row.requiredHours, headcount: total.headcount + row.shiftCount }), { productive: 0, required: 0, headcount: 0 });
+  const selectedShiftCapability = selectedShiftTotals.required > 0 ? selectedShiftTotals.productive / selectedShiftTotals.required * 100 : 0;
+  const unavailableRoleRows = latestDailyShiftCapability.filter(row => row.shift !== 'Unspecified' && !row.demandAvailable);
+  const displayDate = (date: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(`${date}T00:00:00`));
   return (
     <Box>
       <PageHeader title="Live Schedule Dashboard" subtitle="Current and next-week daily operational view" />
@@ -51,7 +64,40 @@ export default function LiveScheduleDashboardPage() {
           </Grid>
         </Paper>
         <Grid container spacing={2}><Grid item xs={12} md={7}><Paper className="table-wrap" sx={{ overflowX: 'auto' }}><Typography variant="h6" fontWeight={800} sx={{ mb: 2 }}>Daily schedule</Typography><Table size="small" sx={{ minWidth: 720 }}><TableHead><TableRow>{['Day', 'Booked inbound', 'Forecast outbound', 'Booked outbound', 'Inbound cap.', 'Outbound cap.', 'Cycles'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead><TableBody>{rows.map(row => <TableRow key={row.day} hover><TableCell sx={{ fontWeight: 700 }}>{row.day}<Typography variant="caption" display="block" color="text.secondary">{row.date}</Typography></TableCell><TableCell>{row.inboundBooked}</TableCell><TableCell>{row.forecastOutboundLoads}</TableCell><TableCell>{row.bookedOutboundLoads}</TableCell><TableCell sx={{ color: capabilityColor(row.inboundCapability), fontWeight: 800 }}>{row.inboundCapability}%</TableCell><TableCell sx={{ color: capabilityColor(row.outboundCapability), fontWeight: 800 }}>{row.outboundCapability}%</TableCell><TableCell sx={{ color: capabilityColor(row.cycleCapability), fontWeight: 800 }}>{row.cycleCapability}%</TableCell></TableRow>)}</TableBody></Table></Paper></Grid><Grid item xs={12} md={5}><Paper className="chart-card" sx={{ height: '100%' }}><Typography variant="h6" fontWeight={800}>Selected day: {selected.day}</Typography><Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{selected.date}</Typography><Stack spacing={1.5}><Stack direction="row" justifyContent="space-between"><Typography>Booked inbound</Typography><Typography fontWeight={800}>{selected.inboundBooked} loads</Typography></Stack><Stack direction="row" justifyContent="space-between"><Typography>Forecast outbound</Typography><Typography fontWeight={800}>{selected.forecastOutboundLoads} loads</Typography></Stack><Stack direction="row" justifyContent="space-between"><Typography>Booked outbound</Typography><Typography fontWeight={800}>{selected.bookedOutboundLoads} loads</Typography></Stack><Stack direction="row" justifyContent="space-between"><Typography>Inbound capability</Typography><Chip size="small" label={`${selected.inboundCapability}%`} color={selected.inboundCapability < 90 ? 'error' : 'success'} /></Stack><Stack direction="row" justifyContent="space-between"><Typography>Outbound capability</Typography><Chip size="small" label={`${selected.outboundCapability}%`} color={selected.outboundCapability < 90 ? 'error' : 'success'} /></Stack></Stack><Alert severity="info" sx={{ mt: 3 }}>Daily fixture is based on the WK38 workbook. Upload a current schedule file below to replace it with live data.</Alert></Paper></Grid></Grid>
-        <Paper className="upload-panel"><Typography variant="h6" fontWeight={800}>Live data upload</Typography><Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 2 }}><UploadComponent title="Schedule File (MyTime)" accept=".csv,.xlsx" kind="schedule" /><UploadComponent title="STP forecast file" accept=".csv,.xlsx" kind="stp" /></Stack></Paper>
+        <Paper className="table-wrap" sx={{ overflowX: 'auto' }}>
+          <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} gap={2} sx={{ mb: 2 }}>
+            <Box>
+              <Typography variant="h6" fontWeight={800}>Shift capability matrix</Typography>
+              <Typography variant="body2" color="text.secondary">Productive hours versus STP-required hours, using the active Ops/Non-Ops and DC/CDC scope.</Typography>
+            </Box>
+            <ToggleButtonGroup size="small" exclusive value={capacityShift} onChange={(_, shift) => shift && setCapacityShift(shift)}>
+              <ToggleButton value="AM">AM</ToggleButton>
+              <ToggleButton value="PM">PM</ToggleButton>
+              <ToggleButton value="Night">Night</ToggleButton>
+            </ToggleButtonGroup>
+          </Stack>
+          {selectedShiftRows.length ? <>
+            <Grid container spacing={1.5} sx={{ mb: 2 }}>
+              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Required hours</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.required.toFixed(1)}</Typography></Paper></Grid>
+              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Productive hours</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.productive.toFixed(1)}</Typography></Paper></Grid>
+              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Headcount</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.headcount}</Typography></Paper></Grid>
+              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25, bgcolor: selectedShiftCapability >= 100 ? '#edf7f0' : '#fff1f1' }}><Typography variant="caption" color="text.secondary">Capability</Typography><Typography variant="h6" fontWeight={800} color={selectedShiftCapability >= 100 ? 'success.main' : 'error.main'}>{selectedShiftCapability.toFixed(1)}%</Typography></Paper></Grid>
+            </Grid>
+            <TableContainer><Table size="small" sx={{ minWidth: 980 }}>
+              <TableHead><TableRow sx={{ bgcolor: '#f4f7fb' }}><TableCell sx={{ fontWeight: 800, minWidth: 150 }}>Role</TableCell>{latestScheduleDates.map(date => <TableCell key={date} align="center" sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{displayDate(date)}</TableCell>)}</TableRow></TableHead>
+              <TableBody>{selectedShiftRoles.map(role => <TableRow key={role} hover><TableCell sx={{ fontWeight: 800 }}>{role}</TableCell>{latestScheduleDates.map(date => {
+                const row = selectedShiftRows.find(item => item.role === role && item.date === date);
+                if (!row) return <TableCell key={date} align="center" sx={{ color: 'text.disabled' }}>—</TableCell>;
+                const under = row.capability < 100;
+                const productiveHeadcount = row.shiftCount;
+                const hoursPerPerson = Math.max(resourceMapping.productiveHoursPerShift * resourceMapping.directTaskAvailability, 0.01);
+                const requiredHeadcount = row.requiredHours > 0 ? Math.ceil(row.requiredHours / hoursPerPerson) : 0;
+                return <TableCell key={date} align="center" onClick={() => setCellDisplayMode(mode => mode === 'hours' ? 'headcount' : 'hours')} sx={{ minWidth: 112, bgcolor: under ? '#fff4f3' : '#eff8f2', cursor: 'pointer' }}><Typography variant="body2" fontWeight={800} color={under ? 'error.main' : 'success.main'}>{row.capability.toFixed(0)}%</Typography><Typography variant="caption" color="text.secondary">{cellDisplayMode === 'hours' ? `${row.productiveHours.toFixed(1)} / ${row.requiredHours.toFixed(1)}h` : `${productiveHeadcount} / ${requiredHeadcount} people`}</Typography></TableCell>;
+              })}</TableRow>)}</TableBody>
+            </Table></TableContainer>
+            {unavailableRoleRows.length > 0 && <Alert severity="info" sx={{ mt: 2 }}>{unavailableRoleRows.length} scoped schedule rows have no matched STP demand or no usable shift classification, so they are excluded from this capability matrix.</Alert>}
+          </> : <Alert severity="info">Upload a scoped operational schedule with dates, start times, roles, and scheduled hours, plus matching STP data, to calculate the capability matrix.</Alert>}
+        </Paper>
         <Paper elevation={0} sx={{ p: 1, borderRadius: 2, border: '1px solid rgba(0,0,0,0.14)', bgcolor: 'background.paper' }}>
           <Typography variant="h6" fontWeight={800} sx={{ px: 1, pt: 1 }}>Embedded Live Schedule HTML</Typography>
           <Box component="iframe" title="Embedded Live Schedule Dashboard" src="https://christopherrichardson-rgb.github.io/Live-schedule-Dashboard/" sx={{ width: '100%', minHeight: '760px', height: 'calc(100vh - 270px)', border: 'none', borderRadius: 1, display: 'block', bgcolor: 'background.paper', mt: 1 }} />

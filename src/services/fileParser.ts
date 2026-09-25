@@ -156,8 +156,71 @@ function parseM2WorkbookSheet(sheet: XLSX.WorkSheet): Array<Record<string, strin
   }];
 }
 
+function parseHistoricalAbsenceWorkbook(sheet: XLSX.WorkSheet): Array<Record<string, string | number>> {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
+  const records: Array<Record<string, string | number>> = [];
+  for (const row of rows.slice(12)) {
+    const dateText = String(row[0] ?? '');
+    const dateMatch = dateText.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    const hours = toNumber(row[3]);
+    const absenceType = String(row[5] ?? '').trim();
+    if (!dateMatch || hours <= 0 || !absenceType) continue;
+    const date = `${dateMatch[3]}-${String(dateMatch[2]).padStart(2, '0')}-${String(dateMatch[1]).padStart(2, '0')}`;
+    const details = isoWeekDetails(date);
+    records.push({ date, absenceDate: date, absenceType, absenceHours: hours, hours, weekCode: `${details.year}-W${String(details.week).padStart(2, '0')}` });
+  }
+  return records;
+}
+
 function parseMtpWorkbookSheet(sheet: XLSX.WorkSheet): MtpMonthData[] {
   const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
+  const measureHeaderIndex = rows.findIndex(row => String(row[0] ?? '').trim().toLowerCase() === 'measures');
+  if (measureHeaderIndex >= 0 && rows[measureHeaderIndex - 1]?.some(value => /^20\d{4}$/.test(String(value ?? '')))) {
+    const monthCodes = rows[measureHeaderIndex - 1] ?? [];
+    const monthNames: Record<string, string> = {
+      '202609': 'September', '202610': 'October', '202611': 'November', '202612': 'December',
+      '202701': 'January', '202702': 'February', '202703': 'March', '202704': 'April',
+      '202705': 'May', '202706': 'June', '202707': 'July', '202708': 'August'
+    };
+    const normalizedRowLabel = (row: unknown[]) => normalizeHeader(String(row[0] ?? ''));
+    const findExportRow = (...labels: string[]) => rows.find(row => {
+      const rowLabel = normalizedRowLabel(row);
+      return labels.some(label => rowLabel === normalizeHeader(label) || rowLabel.includes(normalizeHeader(label)));
+    });
+    const inbound = findExportRow('Total Inbound', 'Inbound') ?? [];
+    const outflow = findExportRow('Total Outbound', 'Total Outflow', 'Outflow', 'Outbound') ?? [];
+    const handling = findExportRow('Total Handling (Queue Corrected)', 'Total Handling') ?? [];
+    const capacity = findExportRow('Total Handling Capacity', 'Handling Capacity') ?? [];
+    const operationalHours = findExportRow('Operational hrs need', 'Operational hours need', 'Operational hours') ?? [];
+    const fp = findExportRow('FTE for FP', 'FTE FP') ?? [];
+    const pick = findExportRow('FTE for Pick', 'FTE Pick') ?? [];
+    const development = findExportRow('FTE to cover development', 'Development') ?? [];
+    const sickness = findExportRow('FTE to cover sickness', 'Sickness') ?? [];
+    const holidays = findExportRow('FTE to cover holidays', 'Holidays') ?? [];
+    const total = findExportRow('Total FTE need', 'FTE need') ?? [];
+    return monthCodes.slice(1).map((code, index) => {
+      const monthCode = String(code ?? '');
+      const inboundVolume = toMtpNumber(inbound[index + 1]);
+      const outflowVolume = toMtpNumber(outflow[index + 1]);
+      const totalHandlingVolume = toMtpNumber(handling[index + 1]) || inboundVolume + outflowVolume;
+      return {
+        month: monthNames[monthCode] ?? monthCode,
+        weeksIncluded: 0,
+        inboundVolume,
+        outflowVolume,
+        totalHandlingVolume,
+        averageWeeklyVolume: totalHandlingVolume,
+        operationalHoursNeed: toMtpNumber(operationalHours[index + 1]),
+        fteForFp: toMtpNumber(fp[index + 1]),
+        fteForPick: toMtpNumber(pick[index + 1]),
+        fteDevelopment: toMtpNumber(development[index + 1]),
+        fteSickness: toMtpNumber(sickness[index + 1]),
+        fteHolidays: toMtpNumber(holidays[index + 1]),
+        totalFteNeed: toMtpNumber(total[index + 1]),
+        handlingCapacity: toMtpNumber(capacity[index + 1])
+      } as MtpMonthData;
+    }).filter(row => row.month && row.totalHandlingVolume > 0);
+  }
   const flowHeaderIndex = rows.findIndex(row => String(row[0] ?? '').trim().toLowerCase() === 'flow');
   if (flowHeaderIndex < 0) return [];
 
@@ -350,7 +413,7 @@ export function normalizeRows(rawLines: string[], kind: UploadKind): Array<Recor
 
     normalizeRecordForKind(record, kind);
 
-    if (!record.role || String(record.role).trim() === '') {
+    if (!record.role && kind !== 'holiday-ly' && kind !== 'holiday-ty') {
       continue;
     }
 
@@ -438,7 +501,7 @@ export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast
 
       if (kind === 'mtp') {
         const mtpRows = workbook.SheetNames.flatMap(sheetName => parseMtpWorkbookSheet(workbook.Sheets[sheetName]));
-        if (!mtpRows.some(row => row.totalHandlingVolume > 0)) throw new Error('No MTP summary rows found in workbook.');
+        if (!mtpRows.some(row => row.totalHandlingVolume > 0 || row.inboundVolume > 0 || row.outflowVolume > 0)) throw new Error('No MTP summary rows found in workbook.');
         return {
           fileName,
           kind,
@@ -460,6 +523,20 @@ export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast
           status: 'parsed',
           message: `Parsed ${records.length} weekly M2 record${records.length === 1 ? '' : 's'} from ${fileName}.`
         };
+      }
+
+      if (kind === 'absence') {
+        const historicalRecords = workbook.SheetNames.flatMap(sheetName => parseHistoricalAbsenceWorkbook(workbook.Sheets[sheetName]));
+        if (historicalRecords.length) {
+          return {
+            fileName,
+            kind,
+            importedAt: new Date().toISOString(),
+            records: historicalRecords,
+            status: 'parsed',
+            message: `Parsed ${historicalRecords.length} historical absence records from ${fileName}.`
+          };
+        }
       }
 
       const records: Array<Record<string, string | number>> = [];

@@ -1,12 +1,16 @@
 const STORAGE_KEY = 'dc-planner-state-v1';
 const MTP_BASELINE_MIGRATION_KEY = 'dc-planner-mtp-baseline-v2';
 const BOOKING_OFFICE_SCOPE_MIGRATION_KEY = 'dc-planner-booking-office-scope-v1';
+const NON_OPS_ROLE_MIGRATION_KEY = 'dc-planner-non-ops-roles-v2';
+const TRANSIT_ROLE_MIGRATION_KEY = 'dc-planner-transit-role-v1';
+const WK38_DEMAND_PROFILE_MIGRATION_KEY = 'dc-planner-wk38-demand-profiles-v1';
 
 export interface PlannerStorageState {
   roles: import('./types').Role[];
   resourceMapping: import('./types').ResourceMapping;
   themeMode: 'light' | 'dark';
-  roleScope?: 'ops' | 'non-ops' | 'both';
+  roleScope?: 'ops' | 'non-ops' | 'both' | 'dc' | 'cdc';
+  dcCdcScope?: 'dc' | 'cdc' | 'both';
   uploadedFiles: import('./types').UploadedFileRecord[];
 }
 
@@ -19,7 +23,13 @@ export const defaultStorageState = (): PlannerStorageState => ({
     fte: 206,
     leavers: 1.5,
     truckVolumeM3: 60,
+    m3PerPallet: 0.82,
     productivityTargetM3PerHour: 7.3,
+    breakMinutesPerShift: 45,
+    productiveHoursPerShift: 6.5,
+    directTaskAvailability: 0.9,
+    shiftDemandProfiles: defaultShiftDemandProfiles(),
+    demandStreamProfiles: defaultDemandStreamProfiles(),
     monthValues: {
         September: { absence: 0.10, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5 },
         October: { absence: 0.10, holiday: 0.08, training: 0.02, fte: 204, leavers: 1.5 },
@@ -37,6 +47,7 @@ export const defaultStorageState = (): PlannerStorageState => ({
   },
   themeMode: 'light',
   roleScope: 'both',
+  dcCdcScope: 'both',
   uploadedFiles: []
 });
 
@@ -75,7 +86,7 @@ function applyMtpBaseline(resourceMapping: PlannerStorageState['resourceMapping'
   return { ...resourceMapping, absence: 0.10, holiday: 0.07, training: 0.02, fte: 206, leavers: 1.5, monthValues };
 }
 
-import { Role, ResourceMapping } from './types';
+import { defaultDemandStreamProfiles, defaultShiftDemandProfiles, Role, ResourceMapping } from './types';
 
 export function loadState(): PlannerStorageState {
   const fallback = defaultStorageState();
@@ -89,9 +100,43 @@ export function loadState(): PlannerStorageState {
       merged.roles = (merged.roles || []).map(role => role.role === 'Booking Office' ? { ...role, type: 'Non-Ops' } : role);
       localStorage.setItem(BOOKING_OFFICE_SCOPE_MIGRATION_KEY, 'applied');
     }
+    const requiredNonOpsRoles = ['Facility', 'Supply Quality', 'P&C Generalist', 'Coordinator', 'IKEA Food Manager', 'IF Kitchen Manager', 'Serving', 'Invent', 'P&C Manager', 'Staff Chef'];
+    const hasAllNonOpsRoles = requiredNonOpsRoles.every(requiredRole => (merged.roles || []).some(role => role.role.toLowerCase() === requiredRole.toLowerCase()));
+    if (!localStorage.getItem(NON_OPS_ROLE_MIGRATION_KEY) || !hasAllNonOpsRoles) {
+      const existingRoles = merged.roles || [];
+      const additions = [
+        { id: 'manager', role: 'Manager', translation: 'Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'team-leader', role: 'Team Leader', translation: 'Team Leader', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'transit', role: 'Transit', translation: 'Transit', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'pcmanager', role: 'pcmanager', translation: 'PC Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'staffchief', role: 'staffchief', translation: 'Staff Chief', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'training', role: 'training', translation: 'Training', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'facility', role: 'Facility', translation: 'Facility', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'supply-quality', role: 'Supply Quality', translation: 'Supply Quality', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'pc-generalist', role: 'P&C Generalist', translation: 'P&C Generalist', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'coordinator', role: 'Coordinator', translation: 'Coordinator', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'ikea-food-manager', role: 'IKEA Food Manager', translation: 'IKEA Food Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'if-kitchen-manager', role: 'IF Kitchen Manager', translation: 'IF Kitchen Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'serving', role: 'Serving', translation: 'Serving', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'invent', role: 'Invent', translation: 'Invent', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'pc-manager', role: 'P&C Manager', translation: 'P&C Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const },
+        { id: 'staff-chef', role: 'Staff Chef', translation: 'Staff Chef', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' as const }
+      ];
+      const zeroProductivityNames = ['Mats', 'MCT', 'pcmanager', 'staffchief', 'training', 'Facility', 'Supply Quality', 'P&C Generalist', 'Coordinator', 'IKEA Food Manager', 'IF Kitchen Manager', 'Serving', 'Invent', 'P&C Manager', 'Staff Chef'];
+      merged.roles = [...existingRoles.map(role => zeroProductivityNames.includes(role.role) ? { ...role, type: 'Non-Ops' as const } : role), ...additions.filter(addition => !existingRoles.some(role => role.role.toLowerCase() === addition.role.toLowerCase()))];
+      localStorage.setItem(NON_OPS_ROLE_MIGRATION_KEY, 'applied');
+    }
+    if (!localStorage.getItem(TRANSIT_ROLE_MIGRATION_KEY)) {
+      merged.roles = (merged.roles || []).filter(role => role.role !== 'Transit');
+      localStorage.setItem(TRANSIT_ROLE_MIGRATION_KEY, 'applied');
+    }
     if (!localStorage.getItem(MTP_BASELINE_MIGRATION_KEY)) {
       merged.resourceMapping = applyMtpBaseline(merged.resourceMapping);
       localStorage.setItem(MTP_BASELINE_MIGRATION_KEY, 'applied');
+    }
+    if (!localStorage.getItem(WK38_DEMAND_PROFILE_MIGRATION_KEY)) {
+      merged.resourceMapping = { ...merged.resourceMapping, demandStreamProfiles: defaultDemandStreamProfiles() };
+      localStorage.setItem(WK38_DEMAND_PROFILE_MIGRATION_KEY, 'applied');
     }
     const monthValues = merged.resourceMapping?.monthValues || {};
     const migratedMonthValues = Object.fromEntries(Object.entries(monthValues).map(([month, value]) => [
@@ -100,7 +145,7 @@ export function loadState(): PlannerStorageState {
         ? { absence: value, holiday: merged.resourceMapping.holiday, training: merged.resourceMapping.training, fte: merged.resourceMapping.fte, leavers: merged.resourceMapping.leavers }
         : value
     ]));
-    merged.resourceMapping = applyFteCarryForward({ ...merged.resourceMapping, truckVolumeM3: merged.resourceMapping.truckVolumeM3 ?? 60, productivityTargetM3PerHour: merged.resourceMapping.productivityTargetM3PerHour ?? 7.3, monthValues: migratedMonthValues });
+    merged.resourceMapping = applyFteCarryForward({ ...merged.resourceMapping, truckVolumeM3: merged.resourceMapping.truckVolumeM3 ?? 60, m3PerPallet: merged.resourceMapping.m3PerPallet ?? 0.82, productivityTargetM3PerHour: merged.resourceMapping.productivityTargetM3PerHour ?? 7.3, breakMinutesPerShift: merged.resourceMapping.breakMinutesPerShift ?? 45, productiveHoursPerShift: merged.resourceMapping.productiveHoursPerShift ?? 6.5, directTaskAvailability: merged.resourceMapping.directTaskAvailability ?? 0.9, shiftDemandProfiles: merged.resourceMapping.shiftDemandProfiles ?? defaultShiftDemandProfiles(), demandStreamProfiles: merged.resourceMapping.demandStreamProfiles ?? defaultDemandStreamProfiles(), monthValues: migratedMonthValues });
     return merged;
   } catch {
     return fallback;
@@ -113,26 +158,41 @@ export function saveState(state: PlannerStorageState) {
 
 export function roleDefaults() {
   return [
+    { id: 'manager', role: 'Manager', translation: 'Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'team-leader', role: 'Team Leader', translation: 'Team Leader', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'pcmanager', role: 'pcmanager', translation: 'PC Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'staffchief', role: 'staffchief', translation: 'Staff Chief', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'training', role: 'training', translation: 'Training', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'facility', role: 'Facility', translation: 'Facility', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'supply-quality', role: 'Supply Quality', translation: 'Supply Quality', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'pc-generalist', role: 'P&C Generalist', translation: 'P&C Generalist', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'coordinator', role: 'Coordinator', translation: 'Coordinator', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'ikea-food-manager', role: 'IKEA Food Manager', translation: 'IKEA Food Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'if-kitchen-manager', role: 'IF Kitchen Manager', translation: 'IF Kitchen Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'serving', role: 'Serving', translation: 'Serving', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'invent', role: 'Invent', translation: 'Invent', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'pc-manager', role: 'P&C Manager', translation: 'P&C Manager', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: 'staff-chef', role: 'Staff Chef', translation: 'Staff Chef', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
     { id: '1', role: 'Banding', translation: 'Banding', palletsPerHour: 43.1, m3PerPallet: 0.82, baselineValue: 35.34, type: 'Operational' },
-    { id: '2', role: 'Bayclearing', translation: 'Bayclearing', palletsPerHour: 35, m3PerPallet: 0.82, baselineValue: 28.7, type: 'Operational' },
+    { id: '2', role: 'Bayclearing', translation: 'Bayclearing', palletsPerHour: 35, m3PerPallet: 0.82, baselineValue: 35, type: 'Operational' },
     { id: '3', role: 'Booking Office', translation: 'Booking Office', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Non-Ops' },
     { id: '4', role: 'Co-Worker', translation: 'Co-Worker', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
     { id: '5', role: 'Cycles', translation: 'Cycles', palletsPerHour: 17, m3PerPallet: 0.82, baselineValue: 13.94, type: 'Operational' },
-    { id: '6', role: 'DC Loading', translation: 'DC Loading', palletsPerHour: 42, m3PerPallet: 0.82, baselineValue: 34.44, type: 'Operational' },
-    { id: '7', role: 'DC Tipping', translation: 'DC Tipping', palletsPerHour: 40, m3PerPallet: 0.82, baselineValue: 32.8, type: 'Operational' },
+    { id: '6', role: 'DC Loading', translation: 'DC Loading', palletsPerHour: 42, m3PerPallet: 0.82, baselineValue: 42, type: 'Operational' },
+    { id: '7', role: 'DC Tipping', translation: 'DC Tipping', palletsPerHour: 40, m3PerPallet: 0.82, baselineValue: 40, type: 'Operational' },
     { id: '8', role: 'Gatekeeper', translation: 'Gatekeeper', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
-    { id: '9', role: 'Mats', translation: 'Mats', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Operational' },
-    { id: '10', role: 'MCT', translation: 'MCT', palletsPerHour: 0, m3PerPallet: 1, baselineValue: 0, type: 'Operational' },
+    { id: '9', role: 'Mats', translation: 'Mats', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
+    { id: '10', role: 'MCT', translation: 'MCT', palletsPerHour: 0, m3PerPallet: 1, baselineValue: 0, type: 'Non-Ops' },
     { id: '11', role: 'CB Palletless', translation: 'CB Palletless', palletsPerHour: 60, m3PerPallet: 0.82, baselineValue: 49.2, type: 'Operational' },
-    { id: '12', role: 'Picking', translation: 'Picking', palletsPerHour: 22.5, m3PerPallet: 1, baselineValue: 24.5, type: 'Operational' },
+    { id: '12', role: 'Picking', translation: 'Picking', palletsPerHour: 22.5, m3PerPallet: 1, baselineValue: 109.8, type: 'Operational' },
     { id: '13', role: 'Recovery', translation: 'Recovery', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
-    { id: '14', role: 'Replens', translation: 'Replenishment', palletsPerHour: 10.5, m3PerPallet: 1, baselineValue: 10.5, type: 'Operational' },
+    { id: '14', role: 'Replens', translation: 'Replenishment', palletsPerHour: 10.5, m3PerPallet: 0.82, baselineValue: 10.5, demandPercent: 0.37, type: 'Operational' },
     { id: '15', role: 'Shunting', translation: 'Shunting', palletsPerHour: 0, m3PerPallet: 0.82, baselineValue: 0, type: 'Non-Ops' },
     { id: '16', role: 'Transit Cycle', translation: 'Transit Cycle', palletsPerHour: 29.5, m3PerPallet: 0.82, baselineValue: 24.19, type: 'Operational' },
     { id: '17', role: 'Transit Transfer', translation: 'Transit Transfer', palletsPerHour: 29.5, m3PerPallet: 0.82, baselineValue: 24.19, type: 'Operational' },
-    { id: '18', role: 'Transit Tip', translation: 'Transit Tip', palletsPerHour: 34, m3PerPallet: 0.82, baselineValue: 27.88, type: 'Operational' },
-    { id: '19', role: 'Transit Bay', translation: 'Transit Bayclearing', palletsPerHour: 27, m3PerPallet: 0.82, baselineValue: 22.14, type: 'Operational' },
-    { id: '20', role: 'Transit Load', translation: 'Transit Loading', palletsPerHour: 43, m3PerPallet: 0.82, baselineValue: 35.26, type: 'Operational' },
+    { id: '18', role: 'Transit Tip', translation: 'Transit Tip', palletsPerHour: 34, m3PerPallet: 0.82, baselineValue: 34, type: 'Operational' },
+    { id: '19', role: 'Transit Bay', translation: 'Transit Bayclearing', palletsPerHour: 27, m3PerPallet: 0.82, baselineValue: 27, type: 'Operational' },
+    { id: '20', role: 'Transit Load', translation: 'Transit Loading', palletsPerHour: 43, m3PerPallet: 0.82, baselineValue: 43, type: 'Operational' },
     { id: '21', role: 'Tram Plock', translation: 'Tram Plock', palletsPerHour: 27, m3PerPallet: 1, baselineValue: 27, type: 'Operational' }
   ];
 }

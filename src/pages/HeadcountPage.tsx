@@ -3,10 +3,10 @@ import { Alert, Box, Grid, Paper, Stack, Table, TableBody, TableCell, TableConta
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { Bar, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import PageHeader from '../components/PageHeader';
-import UploadComponent from '../components/UploadComponent';
 import { usePlannerContext } from '../context/PlannerContext';
 import { mtpMonths as defaultMtpMonths } from '../mockData';
 import { MtpMonthData } from '../types';
+import { buildStpDemandPlan, stpRoleMappingConfig } from '../services/stpMappingService';
 
 const workbookHolidayRates: Record<string, number> = {
   September: 0.07, October: 0.08, November: 0.08, December: 0.16, January: 0.10, February: 0.14,
@@ -36,24 +36,41 @@ const formatNumber = (value: number) => new Intl.NumberFormat('en-GB', { maximum
 const formatFte = (value: number) => value.toFixed(0);
 
 export default function HeadcountPage() {
-  const { resourceMapping, uploadedFiles } = usePlannerContext();
+  const { resourceMapping, uploadedFiles, roles } = usePlannerContext();
   const mtpUpload = uploadedFiles.find(file => file.kind === 'mtp' && file.status === 'parsed');
   const uploadedMtp = mtpUpload ? recordsToMtp(mtpUpload.records) : [];
   const sourceRows = uploadedMtp.length ? uploadedMtp : defaultMtpMonths;
+  const stpWeekCodes = Array.from({ length: 8 }, (_, index) => `2026${String(36 + index).padStart(2, '0')}`);
+  const stpOperationalHours = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, stpWeekCodes).roleDemandRows
+    .reduce((total, row) => total + row.requiredHours, 0);
+  const averageStpMonthlyHours = stpOperationalHours / stpWeekCodes.length * 4.33;
   const rows = sourceRows.map(source => {
     const assumptions = resourceMapping.monthValues?.[source.month] ?? resourceMapping;
     const absenceRate = assumptions.absence ?? resourceMapping.absence;
     const holidayRate = assumptions.holiday ?? resourceMapping.holiday;
     const trainingRate = assumptions.training ?? resourceMapping.training;
+    const volumeBasedOperationalHours = source.totalHandlingVolume > 0
+      ? source.totalHandlingVolume / Math.max(resourceMapping.productivityTargetM3PerHour, 0.1)
+      : 0;
+    const operationalHoursNeed = source.operationalHoursNeed > 0
+      ? source.operationalHoursNeed
+      : stpOperationalHours > 0
+        ? averageStpMonthlyHours
+        : volumeBasedOperationalHours;
+    const volumeBasedFteNeed = operationalHoursNeed / (37.5 * 4.33);
     const sicknessFte = Math.round(source.fteSickness * absenceRate / 0.10);
     const holidayFte = Math.round(source.fteHolidays * holidayRate / (workbookHolidayRates[source.month] || 0.10));
     const developmentFte = Math.round(source.fteDevelopment * trainingRate / 0.02);
+    const explicitFteBreakdown = source.fteForFp > 0 || source.fteForPick > 0 || source.fteDevelopment > 0 || source.fteSickness > 0 || source.fteHolidays > 0 || source.totalFteNeed > 0;
     return {
       ...source,
+      operationalHoursNeed,
       fteDevelopment: developmentFte,
       fteSickness: sicknessFte,
       fteHolidays: holidayFte,
-      totalFteNeed: source.fteForFp + source.fteForPick + developmentFte + sicknessFte + holidayFte
+      totalFteNeed: explicitFteBreakdown
+        ? source.fteForFp + source.fteForPick + developmentFte + sicknessFte + holidayFte
+        : volumeBasedFteNeed + developmentFte + sicknessFte + holidayFte
     };
   });
   const totalHandling = rows.reduce((sum, row) => sum + row.totalHandlingVolume, 0);
@@ -79,18 +96,18 @@ export default function HeadcountPage() {
     const startingFte = assumptions.fte ?? resourceMapping.fte;
     const leavers = assumptions.leavers ?? resourceMapping.leavers;
     const endingFte = Math.max(startingFte - leavers, 0);
-    const recruitmentNeeded = Math.max(row.totalFteNeed - endingFte, 0);
-    return { month: row.month, startingFte, leavers, endingFte, requiredFte: row.totalFteNeed, recruitmentNeeded, surplus: Math.max(endingFte - row.totalFteNeed, 0) };
+    const requiredFte = row.totalFteNeed * 1.2;
+    const recruitmentNeeded = Math.max(requiredFte - endingFte, 0);
+    return { month: row.month, startingFte, leavers, endingFte, requiredFte, recruitmentNeeded, surplus: Math.max(endingFte - requiredFte, 0) };
   });
 
   return (
     <Box>
       <PageHeader title="Headcount" subtitle="MTP volume converted into monthly operational FTE need" />
       <Stack spacing={2}>
-        <UploadComponent title="Upload latest MTP workbook" accept=".xlsx,.xls" kind="mtp" />
         <Alert severity="info">
           {mtpUpload ? `Using ${mtpUpload.fileName}. ` : 'Using the Connor MTP workbook values supplied with the project. '}
-          Absence, holiday, and training adjustments are linked to Settings &gt; Resource Mapping.
+          Absence, holiday, and training adjustments are linked to Settings &gt; Resource Mapping. Missing MTP FTE rows are calculated from handling volume and the Settings productivity target.
         </Alert>
         <Grid container spacing={2}>
           <Grid item xs={12} sm={4}><Paper className="kpi-card"><Typography variant="caption">12-month handling volume</Typography><Typography variant="h4" fontWeight={800}>{formatNumber(totalHandling)}</Typography></Paper></Grid>

@@ -11,6 +11,7 @@ export interface PlanningCalendarWeek {
   capability: string;
   status: string;
   tone: 'green' | 'blue' | 'orange' | 'purple';
+  estimated?: boolean;
 }
 
 export const planningCalendar: PlanningCalendarWeek[] = [
@@ -53,8 +54,8 @@ export default function WeekCalendarSelector({ selectedIndices, weeks = planning
           <Typography variant="body2" sx={{ color: '#58617a' }}>Weeks {windowStart + 1}-{windowStart + weeks.length} of the available history. Click a week, or hold Ctrl/Cmd to select multiple weeks.</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-          {onPrevious && <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={onPrevious} disabled={!canPrevious}>Previous 8</Button>}
-          {onNext && <Button variant="outlined" endIcon={<ArrowForwardIcon />} onClick={onNext} disabled={!canNext}>Next 8</Button>}
+          {onPrevious && <Button variant="outlined" startIcon={<ArrowBackIcon />} onClick={onPrevious} disabled={!canPrevious}>Previous week</Button>}
+          {onNext && <Button variant="outlined" endIcon={<ArrowForwardIcon />} onClick={onNext} disabled={!canNext}>Next week</Button>}
           <Button variant="contained" className="calendar-button" onClick={onSelectAll}>{fullYearSelected ? 'Return to 8 Weeks' : 'View Full Year'}</Button>
         </Box>
       </Box>
@@ -72,11 +73,11 @@ export default function WeekCalendarSelector({ selectedIndices, weeks = planning
               >
                 <CardContent sx={{ p: 1.5 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{item.week}</Typography>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{item.week}{item.estimated ? '*' : ''}</Typography>
                   </Box>
                   <Typography variant="caption" sx={{ display: 'block', color: '#58617a', mb: 1 }}>{item.label}</Typography>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>Req: {item.req}</Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 700 }}>Sch: {item.sch}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>Sch: {item.sch}{item.estimated ? '*' : ''}</Typography>
                   <Typography variant="body2" sx={{ mt: 1, fontWeight: 800, color: style.color }}>{item.capability}</Typography>
                   <Box sx={{ mt: 1, borderTop: '1px solid #dceaff', pt: 1, textAlign: 'center' }}>
                     <Typography variant="caption" sx={{ display: 'block', fontWeight: 800, color: style.color, background: style.badge, borderRadius: 1, py: 0.35, letterSpacing: '0.06em' }}>{style.label}</Typography>
