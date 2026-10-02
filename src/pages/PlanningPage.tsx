@@ -15,6 +15,7 @@ export default function PlanningPage() {
   const [showPriorYearActuals, setShowPriorYearActuals] = useState(false);
   const [inboundTruckAdjustment, setInboundTruckAdjustment] = useState(0);
   const [outboundTruckAdjustment, setOutboundTruckAdjustment] = useState(0);
+  const [inboundBacklogTrailers, setInboundBacklogTrailers] = useState(0);
 
   const fallbackCalendar = [
     { week: 'W36', label: 'Sep', req: '5637h', sch: '5550h', capability: '98.5%', status: 'OPTIMAL', tone: 'green' },
@@ -65,14 +66,14 @@ export default function PlanningPage() {
       : Number((row as typeof row & { volume?: number }).volume ?? 0) > 0));
   const truckVolume = Math.max(resourceMapping.truckVolumeM3, 0.1);
   const adjustedTableRows = useMemo(() => {
-    const inboundRows = mappedTableRows.filter(row => /tipping|transit tip|replenishment|replen/i.test(String(row.role)));
-    const outboundRows = mappedTableRows.filter(row => /loading|transit load/i.test(String(row.role)));
+    const inboundRows = mappedTableRows.filter(row => /tipping|transit tip|replenishment|replen|bayclear/i.test(String(row.role)));
+    const outboundRows = mappedTableRows.filter(row => /loading|transit load|tram plock/i.test(String(row.role)));
     const adjustRows = (rows: typeof mappedTableRows, truckAdjustment: number) => {
       if (!truckAdjustment || !rows.length) return new Map<string, number>();
       const totalVolume = rows.reduce((total, row) => total + Number((row as typeof row & { volume?: number }).volume ?? 0), 0);
       return new Map(rows.map(row => [row.id, totalVolume > 0 ? truckAdjustment * truckVolume * Number((row as typeof row & { volume?: number }).volume ?? 0) / totalVolume : truckAdjustment * truckVolume / rows.length]));
     };
-    const adjustments = new Map([...adjustRows(inboundRows, inboundTruckAdjustment), ...adjustRows(outboundRows, outboundTruckAdjustment)]);
+    const adjustments = new Map([...adjustRows(inboundRows, inboundTruckAdjustment + inboundBacklogTrailers), ...adjustRows(outboundRows, outboundTruckAdjustment)]);
     return mappedTableRows.map(row => {
       const rowWithRate = row as typeof row & { targetRate?: number; volume?: number };
       const volumeAdjustment = adjustments.get(row.id) ?? 0;
@@ -88,10 +89,76 @@ export default function PlanningPage() {
         variance: scheduledHours - requiredHours,
         capability,
         status: capability < 90 ? 'Red' : capability < 100 ? 'Amber' : capability > 110 ? 'Blue' : 'Green',
-        recommendation: capability < 90 ? 'Increase scheduled hours or reduce demand.' : capability > 110 ? 'Review surplus scheduled capacity.' : 'On target.'
+        recommendation: capability < 90 ? 'Increase productive hours or reduce demand.' : capability > 110 ? 'Review surplus productive capacity.' : 'On target.'
       };
     });
-  }, [mappedTableRows, inboundTruckAdjustment, outboundTruckAdjustment, truckVolume]);
+  }, [mappedTableRows, inboundTruckAdjustment, outboundTruckAdjustment, inboundBacklogTrailers, truckVolume]);
+  const netProductiveHoursPerPersonShift = (() => {
+    const validScheduleRows = scheduleRows.filter(record => Number(record.scheduledHours ?? record.hours ?? 0) > 0);
+    const scheduleDays = new Set(validScheduleRows.map(record => String(record.date ?? record.shiftdate ?? '').slice(0, 10)).filter(Boolean));
+    const averagePeoplePerDay = scheduleDays.size > 0 ? validScheduleRows.length / scheduleDays.size : 0;
+    const rejectionMinutesPerPerson = averagePeoplePerDay > 0
+      ? resourceMapping.averageRejectionsPerDay * resourceMapping.rejectionMinutesPerRejection / averagePeoplePerDay
+      : 0;
+    const nonProductiveMinutes = resourceMapping.breakMinutesPerShift
+      + resourceMapping.shiftHandoverMinutesPerShift
+      + resourceMapping.truckInspectionMinutesPerShift
+      + resourceMapping.palletlessMinutesPerShift
+      + resourceMapping.travelMinutesPerShift
+      + rejectionMinutesPerPerson;
+    return Math.max(resourceMapping.averageShiftHoursPerShift * (1 - resourceMapping.training) - nonProductiveMinutes / 60, 0.1);
+  })();
+  const recommendationRoles = (adjustedTableRows as Array<typeof adjustedTableRows[number] & { flow?: string }>).map(row => ({
+    flow: String(row.flow ?? 'Other'),
+    role: String(row.role),
+    required: Number(row.requiredHours),
+    productive: Number(row.scheduledHours),
+    surplus: Math.max(Number(row.variance), 0),
+    gap: Math.max(-Number(row.variance), 0)
+  }));
+  const redeploymentRecommendations: Array<{
+    id: string;
+    fromFlow: string;
+    from: string;
+    toFlow: string;
+    to: string;
+    hours: number;
+    peopleShifts: number;
+    fromBefore: number;
+    fromAfter: number;
+    toBefore: number;
+    toAfter: number;
+  }> = [];
+  const allocateRecommendations = (sameFlowOnly: boolean) => {
+    recommendationRoles.filter(role => role.surplus > 0).forEach(donor => {
+      recommendationRoles.filter(role => role.gap > 0 && (!sameFlowOnly || role.flow === donor.flow) && (sameFlowOnly || role.flow !== donor.flow)).forEach(receiver => {
+        if (donor.surplus <= 0 || receiver.gap <= 0) return;
+        const hours = Math.min(donor.surplus, receiver.gap);
+        if (hours <= 0) return;
+        const fromBefore = donor.required > 0 ? donor.productive / donor.required * 100 : 0;
+        const toBefore = receiver.required > 0 ? receiver.productive / receiver.required * 100 : 0;
+        donor.productive -= hours;
+        receiver.productive += hours;
+        donor.surplus -= hours;
+        receiver.gap -= hours;
+        redeploymentRecommendations.push({
+          id: `${donor.flow}-${donor.role}-${receiver.flow}-${receiver.role}`,
+          fromFlow: donor.flow,
+          from: donor.role,
+          toFlow: receiver.flow,
+          to: receiver.role,
+          hours,
+          peopleShifts: hours / netProductiveHoursPerPersonShift,
+          fromBefore,
+          fromAfter: donor.required > 0 ? donor.productive / donor.required * 100 : 0,
+          toBefore,
+          toAfter: receiver.required > 0 ? receiver.productive / receiver.required * 100 : 0
+        });
+      });
+    });
+  };
+  allocateRecommendations(true);
+  allocateRecommendations(false);
   const trendDataForPlanning = useMemo(() => filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex, resourceMapping), selectedWeekIndices), [uploadedFiles, roles, analyticsWeekIndex, selectedWeekIndices, resourceMapping]);
   const absenceRows = useMemo(() => buildPlanningAbsenceBreakdown(uploadedFiles, analyticsWeekIndex), [uploadedFiles, analyticsWeekIndex]);
   const absenceTrendData = useMemo(() => filterPlanningWeeks(buildPlanningAbsenceTrendData(uploadedFiles, analyticsWeekIndex), selectedWeekIndices), [uploadedFiles, analyticsWeekIndex, selectedWeekIndices]);
@@ -118,25 +185,26 @@ export default function PlanningPage() {
   const oceanTotal = forecastSummary.oceanDc + forecastSummary.oceanTransit;
   const inboundForecast = forecastSummary.inboundDc + forecastSummary.inboundTransit;
   const outboundForecast = forecastSummary.outboundDc + forecastSummary.outboundTransit;
-  const adjustedInboundForecast = Math.max(inboundForecast + inboundTruckAdjustment * truckVolume, 0);
+  const adjustedInboundForecast = Math.max(inboundForecast + (inboundTruckAdjustment + inboundBacklogTrailers) * truckVolume, 0);
   const adjustedOutboundForecast = Math.max(outboundForecast + outboundTruckAdjustment * truckVolume, 0);
-  const inboundLoads = adjustedInboundForecast / truckVolume;
-  const outboundLoads = adjustedOutboundForecast / truckVolume;
+  const baseInboundTruckCount = Math.ceil(Math.max(inboundForecast, 0) / truckVolume);
+  const baseOutboundTruckCount = Math.ceil(Math.max(outboundForecast, 0) / truckVolume);
   const capabilityRows = adjustedTableRows as Array<typeof adjustedTableRows[number] & { targetRate?: number }>;
+  const averagePalletSize = Math.max(resourceMapping.m3PerPallet, 0.01);
   const inboundCapacity = capabilityRows
-    .filter(row => /tipping|transit tip|replenishment|replen/i.test(String(row.role)))
+    .filter(row => /tipping|transit tip|replenishment|replen|bayclear/i.test(String(row.role)))
     .reduce((total, row) => total + Number(row.scheduledHours ?? 0) * Number(row.targetRate ?? 0), 0);
   const outboundCapacity = capabilityRows
     .filter(row => /loading|transit load/i.test(String(row.role)))
     .reduce((total, row) => total + Number(row.scheduledHours ?? 0) * Number(row.targetRate ?? 0), 0);
   const inboundScheduledHours = capabilityRows
-    .filter(row => /tipping|transit tip|replenishment|replen/i.test(String(row.role)))
+    .filter(row => /tipping|transit tip|replenishment|replen|bayclear/i.test(String(row.role)))
     .reduce((total, row) => total + Number(row.scheduledHours ?? 0), 0);
   const outboundScheduledHours = capabilityRows
     .filter(row => /loading|transit load/i.test(String(row.role)))
     .reduce((total, row) => total + Number(row.scheduledHours ?? 0), 0);
   const inboundRequiredHours = capabilityRows
-    .filter(row => /tipping|transit tip|replenishment|replen/i.test(String(row.role)))
+    .filter(row => /tipping|transit tip|replenishment|replen|bayclear/i.test(String(row.role)))
     .reduce((total, row) => total + Number(row.requiredHours ?? 0), 0);
   const outboundRequiredHours = capabilityRows
     .filter(row => /loading|transit load/i.test(String(row.role)))
@@ -148,14 +216,31 @@ export default function PlanningPage() {
     .filter(row => normalizeFlowRole(String(row.role)) === normalizeFlowRole(roleName))
     .reduce((total, row) => total + Number(row.scheduledHours ?? 0), 0);
   const flowRate = (roleName: string, fallback: number) => Number((capabilityRows.find(row => normalizeFlowRole(String(row.role)) === normalizeFlowRole(roleName)) as (typeof capabilityRows[number] & { targetRate?: number }) | undefined)?.targetRate ?? fallback);
-  const averagePalletSize = 0.82;
-  const flowResourceRows = [
-    { label: 'Inbound DC', demand: forecastSummary.inboundDc, unit: 'm3', rate: flowRate('DC Tipping', 32.8), used: flowRoleHours('DC Tipping') },
-    { label: 'Inbound Transit', demand: forecastSummary.inboundTransit, unit: 'm3', rate: flowRate('Transit Tipping', 28), used: flowRoleHours('Transit Tipping') },
-    { label: 'Outbound DC', demand: forecastSummary.outboundDc, unit: 'm3', rate: flowRate('DC Loading', 34.44), used: flowRoleHours('DC Loading') },
-    { label: 'Outbound Transit', demand: forecastSummary.outboundTransit, unit: 'm3', rate: flowRate('Transit Loading', 35.26), used: flowRoleHours('Transit Loading') },
-    { label: 'Bayclearing', demand: (forecastSummary.inboundDc + forecastSummary.inboundTransit) / averagePalletSize, unit: 'pallets', rate: flowRate('Bayclearing', 35), used: flowRoleHours('Bayclearing') }
-  ].map(row => ({ ...row, needed: row.demand / Math.max(row.rate, 0.1), difference: row.used - row.demand / Math.max(row.rate, 0.1) }));
+  const flowRoleOrder = ['DC Tipping', 'Transit Tip', 'Banding', 'Booking', 'Bayclearing (Transit)', 'Bayclearing (DC)', 'DC Loading', 'Transit Loading', 'Picking', 'Replenishment', 'Cycles'];
+  const flowResourceRows = (capabilityRows as Array<typeof capabilityRows[number] & { volume?: number; targetUnit?: string; flow?: string }>)
+    .filter(row => Number((row as typeof row & { volume?: number }).volume ?? 0) > 0 && normalizeFlowRole(String(row.role)) !== 'pick' && normalizeFlowRole(String(row.role)) !== 'picking')
+    .map(row => {
+      const volume = Number((row as typeof row & { volume?: number }).volume ?? 0);
+      const normalizedRole = normalizeFlowRole(String(row.role));
+      const targetUnit = String((row as typeof row & { targetUnit?: string }).targetUnit
+        ?? (['pick', 'picking', 'replens', 'replenishment'].includes(normalizedRole)
+          ? 'OL/h'
+          : normalizedRole.includes('bayclearing') ? 'pallets/h' : 'm3/h'));
+      const unit = targetUnit === 'pallets/h' ? 'pallets' : targetUnit === 'OL/h' ? 'OL' : 'm3';
+      const rate = Number(row.targetRate ?? 0);
+      const used = Number(row.scheduledHours ?? 0);
+      const needed = Number(row.requiredHours ?? 0);
+      const flow = row.flow === 'Inbound' ? 'Inbound' : 'Outbound';
+      return { flow, label: String(row.role), demand: volume, unit, rate, used, needed, difference: used - needed };
+    })
+    .sort((left, right) => flowRoleOrder.indexOf(left.label) - flowRoleOrder.indexOf(right.label));
+  const flowResourceGroups = (['Inbound', 'Outbound'] as const).map(flow => {
+    const items = flowResourceRows.filter(row => row.flow === flow);
+    const used = items.reduce((total, row) => total + row.used, 0);
+    const needed = items.reduce((total, row) => total + row.needed, 0);
+    const difference = used - needed;
+    return { flow, items, used, needed, difference, capability: needed > 0 ? used / needed * 100 : used > 0 ? 100 : 0 };
+  }).filter(group => group.items.length > 0);
   const selectedForecastVolume = inboundForecast + outboundForecast;
   const priorYearActual = historicalFollowUpWeeks.find(week => week.year === 2025 && week.week === planningWeekLabels[selectedWeekIndices[0]]);
   const comparisonForecast = selectedForecastVolume;
@@ -181,9 +266,9 @@ export default function PlanningPage() {
       <PageHeader title="Planning" subtitle={`8 Week Lookahead — ${planning.lookaheadWeeks} weeks • ${selectedWeekLabel} selected`} />
       <Grid container spacing={2} className="card-grid">
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Required Hours" value={Math.round(selectedRequired)} subtitle="Forecast" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Scheduled Hours" value={Math.round(selectedScheduled)} subtitle="Rostered" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><KPI title="Productive Hours" value={Math.round(selectedScheduled)} subtitle="After shift deductions" /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Variance" value={Math.round(selectedScheduled - selectedRequired)} subtitle="Hours" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(selectedCapability * 10) / 10}%`} subtitle="Forecast" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(selectedCapability * 10) / 10}%`} subtitle="Productive ÷ required" /></Grid>
       </Grid>
 
       <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
@@ -214,33 +299,47 @@ export default function PlanningPage() {
 
       <Paper className="table-wrap" sx={{ mt: 2, p: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 800 }}>Forecast volume versus scheduled capability</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Load estimates use the Settings truck-volume assumption. Role capacity uses scheduled hours multiplied by the configured role target rate.</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Load estimates use the Settings truck-volume assumption. Role capacity uses productive hours multiplied by the configured role target rate.</Typography>
         <Grid container spacing={2}>
           {[
-            ['Inbound loads', inboundLoads, inboundCapacity, inboundCapability],
-            ['Outbound loads', outboundLoads, outboundCapacity, outboundCapability]
-          ].map(([label, loads, capacity, capabilityValue]) => <Grid item xs={12} md={6} key={label as string}>
+            ['Inbound loads', inboundCapacity, inboundCapability],
+            ['Outbound loads', outboundCapacity, outboundCapability]
+          ].map(([label, capacity, capabilityValue]) => <Grid item xs={12} md={6} key={label as string}>
             <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
               <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
                 <Typography variant="subtitle1" fontWeight={800}>{label}</Typography>
                 <TextField
-                  label="Truck adjustment"
+                  label={label === 'Inbound loads' ? 'Total inbound trucks' : 'Total outbound trucks'}
                   type="number"
                   size="small"
-                  value={label === 'Inbound loads' ? inboundTruckAdjustment : outboundTruckAdjustment}
+                  value={label === 'Inbound loads' ? Math.max(Math.round(baseInboundTruckCount + inboundTruckAdjustment + inboundBacklogTrailers), 0) : Math.max(Math.round(baseOutboundTruckCount + outboundTruckAdjustment), 0)}
                   onChange={event => {
                     const value = Number(event.target.value);
-                    const adjustment = Number.isFinite(value) ? value : 0;
-                    if (label === 'Inbound loads') setInboundTruckAdjustment(adjustment);
-                    else setOutboundTruckAdjustment(adjustment);
+                    if (!Number.isFinite(value)) return;
+                    const totalTrucks = Math.max(Math.round(value), 0);
+                    if (label === 'Inbound loads') setInboundTruckAdjustment(totalTrucks - baseInboundTruckCount - inboundBacklogTrailers);
+                    else setOutboundTruckAdjustment(totalTrucks - baseOutboundTruckCount);
                   }}
                   inputProps={{ step: 1 }}
-                  helperText="+ add, - remove"
+                  helperText="Set total truck count"
                   sx={{ width: 150 }}
                 />
+                {label === 'Inbound loads' && <TextField
+                  label="Inbound backlog trailers"
+                  type="number"
+                  size="small"
+                  value={inboundBacklogTrailers}
+                  onChange={event => {
+                    const value = Number(event.target.value);
+                    if (Number.isFinite(value)) setInboundBacklogTrailers(Math.max(Math.round(value), 0));
+                  }}
+                  inputProps={{ min: 0, step: 1 }}
+                  helperText="Added to inbound demand"
+                  sx={{ width: 175 }}
+                />}
               </Stack>
               <Grid container spacing={2} sx={{ mt: 0.5 }}>
-                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Forecast loads</Typography><Typography variant="h6" fontWeight={800}>{Math.ceil(loads as number)}</Typography></Grid>
+                <Grid item xs={4}><Typography variant="caption" color="text.secondary">Forecast volume</Typography><Typography variant="h6" fontWeight={800}>{Math.round((label === 'Inbound loads' ? adjustedInboundForecast : adjustedOutboundForecast) as number).toLocaleString('en-GB')} m³</Typography></Grid>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Supported m3</Typography><Typography variant="h6" fontWeight={800}>{Math.round(capacity as number).toLocaleString('en-GB')}</Typography></Grid>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Capability</Typography><Typography variant="h6" fontWeight={800} color={(capabilityValue as number) >= 100 ? 'success.main' : 'error.main'}>{(capabilityValue as number).toFixed(1)}%</Typography></Grid>
                 <Grid item xs={12}>
@@ -260,19 +359,34 @@ export default function PlanningPage() {
 
       <Paper className="table-wrap" sx={{ mt: 2, p: 2, overflowX: 'auto' }}>
         <Typography variant="h6" sx={{ fontWeight: 800 }}>Flow resource check</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Bayclearing converts inbound volume to pallets using {averagePalletSize} m3 per pallet. Difference is scheduled hours minus required hours.</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Bayclearing converts inbound volume to pallets using {averagePalletSize} m3 per pallet. Difference is productive hours minus required hours.</Typography>
         <TableContainer>
-          <Table size="small" sx={{ minWidth: 900 }}>
-            <TableHead><TableRow>{['Flow', 'Demand', 'Target rate', 'Hours used', 'Hours needed', 'Difference', 'Status'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
-            <TableBody>{flowResourceRows.map(row => <TableRow key={row.label} hover>
+          <Table size="small" sx={{ minWidth: 980 }}>
+            <TableHead><TableRow>{['Flow / Task', 'Demand', 'Target rate', 'Productive hours', 'Hours needed', 'Difference', 'Capability', 'Status'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+            <TableBody>{flowResourceGroups.flatMap(group => [
+              <TableRow key={`${group.flow}-heading`}><TableCell colSpan={8} sx={{ bgcolor: '#edf2f8', color: '#172b55', fontWeight: 800 }}>{group.flow}</TableCell></TableRow>,
+              ...group.items.map(row => {
+                const capability = row.needed > 0 ? row.used / row.needed * 100 : row.used > 0 ? 100 : 0;
+                return <TableRow key={row.label} hover>
               <TableCell sx={{ fontWeight: 700 }}>{row.label}</TableCell>
               <TableCell>{Math.round(row.demand).toLocaleString('en-GB')} {row.unit}</TableCell>
-              <TableCell>{row.rate.toFixed(1)} {row.unit === 'pallets' ? 'pallets/h' : 'm3/h'}</TableCell>
+              <TableCell>{row.rate.toFixed(2)} {row.unit === 'pallets' ? 'pallets/h' : row.unit === 'OL' ? 'OL/h' : 'm3/h'}</TableCell>
               <TableCell>{Math.round(row.used).toLocaleString('en-GB')}</TableCell>
               <TableCell>{Math.round(row.needed).toLocaleString('en-GB')}</TableCell>
               <TableCell sx={{ color: row.difference < 0 ? 'error.main' : 'success.main', fontWeight: 800 }}>{Math.round(row.difference).toLocaleString('en-GB')}</TableCell>
+              <TableCell sx={{ color: capability < 100 ? 'error.main' : 'success.main', fontWeight: 800 }}>{capability.toFixed(1)}%</TableCell>
               <TableCell sx={{ color: row.difference < 0 ? 'error.main' : 'success.main', fontWeight: 800 }}>{row.difference < 0 ? 'Under' : 'Covered'}</TableCell>
-            </TableRow>)}</TableBody>
+                </TableRow>;
+              }),
+              <TableRow key={`${group.flow}-total`} sx={{ bgcolor: '#f4f7fb' }}>
+                <TableCell colSpan={3} sx={{ fontWeight: 800 }}>{group.flow} Total</TableCell>
+                <TableCell sx={{ fontWeight: 800 }}>{Math.round(group.used).toLocaleString('en-GB')}</TableCell>
+                <TableCell sx={{ fontWeight: 800 }}>{Math.round(group.needed).toLocaleString('en-GB')}</TableCell>
+                <TableCell sx={{ fontWeight: 800, color: group.difference < 0 ? 'error.main' : 'success.main' }}>{Math.round(group.difference).toLocaleString('en-GB')}</TableCell>
+                <TableCell sx={{ fontWeight: 800, color: group.capability < 100 ? 'error.main' : 'success.main' }}>{group.capability.toFixed(1)}%</TableCell>
+                <TableCell sx={{ fontWeight: 800, color: group.difference < 0 ? 'error.main' : 'success.main' }}>{group.difference < 0 ? 'Under' : 'Covered'}</TableCell>
+              </TableRow>
+            ])}</TableBody>
           </Table>
         </TableContainer>
       </Paper>
@@ -327,6 +441,24 @@ export default function PlanningPage() {
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 2 }}>Capability Planning Table <Typography component="span" variant="body2" sx={{ color: '#58617a' }}>({selectedWeekLabel})</Typography></Typography>
         <CapabilityTable key={`capability-table-${selectedWeekLabel}`} rows={adjustedTableRows} />
       </Box>
+
+      <Paper className="table-wrap" sx={{ mt: 2, p: 2, overflowX: 'auto' }}>
+        <Typography variant="h6" sx={{ fontWeight: 800 }}>Recommended Resource Setup</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>Projected same-flow redeployment, applied in order. Capability shows each role before → after the suggested move; people-shifts are estimates and the rota is not changed automatically.</Typography>
+        {redeploymentRecommendations.length ? <Table size="small" sx={{ minWidth: 1200 }}>
+          <TableHead><TableRow sx={{ bgcolor: '#f4f7fb' }}>{['From flow', 'Move from surplus', 'Source capability', 'To flow', 'Move to gap', 'Destination capability', 'Productive hours', 'People-shifts'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+          <TableBody>{redeploymentRecommendations.map(item => <TableRow key={item.id} hover>
+            <TableCell sx={{ fontWeight: 700 }}>{item.fromFlow}</TableCell>
+            <TableCell>{item.from}</TableCell>
+            <TableCell>{item.fromBefore.toFixed(0)}% → {item.fromAfter.toFixed(0)}%</TableCell>
+            <TableCell sx={{ fontWeight: 700 }}>{item.toFlow}</TableCell>
+            <TableCell>{item.to}</TableCell>
+            <TableCell>{item.toBefore.toFixed(0)}% → {item.toAfter.toFixed(0)}%</TableCell>
+            <TableCell>{item.hours.toFixed(1)}h</TableCell>
+            <TableCell>{item.peopleShifts.toFixed(1)}</TableCell>
+          </TableRow>)}</TableBody>
+        </Table> : <Alert severity="success">No same-flow surplus is available to cover another role’s gap for this selection.</Alert>}
+      </Paper>
 
       <Grid container spacing={2} mt={1}>
         <Grid item xs={12} md={6}>

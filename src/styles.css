@@ -32,6 +32,38 @@ body {
   font-weight: 600;
 }
 
+.day-planner-stack > :nth-child(1) { order: 0; }
+.day-planner-stack > :nth-child(5) { order: 1; }
+.day-planner-stack > :nth-child(2) { order: 2; }
+.day-planner-stack > :nth-child(4) { order: 3; }
+.day-planner-stack > :nth-child(3) { order: 4; }
+.day-planner-stack > :nth-child(6) { display: none; }
+.day-planner-stack > :nth-child(3) { display: none; }
+.day-planner-stack > :nth-child(4) { display: none; }
+.role-assignment-cards { order: 3; }
+.roster-adjustments-overlay { box-shadow: 0 18px 50px rgba(15,23,42,0.24) !important; }
+.MuiAutocomplete-popper { z-index: 1600 !important; }
+.MuiPopover-root,
+.MuiMenu-root,
+.MuiModal-root { z-index: 1700 !important; }
+.day-planner-stack > :nth-child(4) > .MuiGrid-item:nth-child(2) { display: none; }
+.day-planner-stack > :nth-child(4) > .MuiGrid-item:first-child { flex-basis: 100%; max-width: 100%; }
+.day-planner-print-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.day-planner-print-summary { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  body { background: #fff !important; }
+  body * { visibility: hidden !important; }
+  .day-planner-print-summary, .day-planner-print-summary * { visibility: visible !important; }
+  .day-planner-print-summary { display: block !important; position: absolute; inset: 0; padding: 0; color: #111827; }
+  .day-planner-print-summary table { width: 100%; border-collapse: collapse; font-size: 8px; table-layout: fixed; }
+  .day-planner-print-summary th, .day-planner-print-summary td { padding: 2px 4px; border-bottom: 1px solid #cbd5e1; vertical-align: top; }
+  .day-planner-print-summary th:nth-child(1) { width: 15%; }
+  .day-planner-print-summary th:nth-child(7) { width: 43%; }
+  .day-planner-print-toolbar { display: none !important; }
+}
+
 @media (max-width: 960px) {
   .card-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
 }

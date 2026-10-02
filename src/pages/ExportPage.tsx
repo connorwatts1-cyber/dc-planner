@@ -57,7 +57,7 @@ export default function ExportPage() {
     slide.background = { color: '102D6E' };
     slide.addText('DC Planner Executive Summary', { x: 0.7, y: 0.8, w: 11.5, h: 0.6, fontSize: 28, bold: true, color: 'FFFFFF' });
     slide.addText('Current planning week', { x: 0.7, y: 1.55, w: 11.5, h: 0.3, fontSize: 15, color: 'DCE7FF' });
-    [['Required hours', planning.requiredHours.toFixed(0)], ['Scheduled hours', planning.scheduledHours.toFixed(0)], ['Capability', `${planning.capability.toFixed(1)}%`], ['Gap', planning.gap.toFixed(0)]].forEach(([label, value], index) => {
+    [['Required hours', planning.requiredHours.toFixed(0)], ['Productive hours', planning.scheduledHours.toFixed(0)], ['Capability', `${planning.capability.toFixed(1)}%`], ['Gap', planning.gap.toFixed(0)]].forEach(([label, value], index) => {
       const x = 0.7 + index * 3;
       slide.addText(label, { x, y: 2.5, w: 2.5, h: 0.25, fontSize: 11, color: 'DCE7FF' });
       slide.addText(value, { x, y: 2.85, w: 2.5, h: 0.45, fontSize: 24, bold: true, color: 'FFFFFF' });
@@ -67,7 +67,7 @@ export default function ExportPage() {
     await pptx.writeFile({ fileName: 'DC_Planner_Executive_Summary.pptx' });
   };
   const downloadMip = () => {
-    const rows = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles).roleDemandRows.map(row => ({ Role: row.role, Volume: row.volume, 'Target rate': row.targetRate, Unit: row.targetUnit ?? 'm3/h', 'Required hours': row.requiredHours }));
+    const rows = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, undefined, resourceMapping).roleDemandRows.map(row => ({ Role: row.role, Volume: row.volume, 'Target rate': row.targetRate, Unit: row.targetUnit ?? 'm3/h', 'Required hours': row.requiredHours }));
     const workbook = XLSX.utils.book_new();
     const worksheet = XLSX.utils.json_to_sheet(rows.length ? rows : cards.map(([label, value]) => ({ Metric: label, Value: value })));
     XLSX.utils.book_append_sheet(workbook, worksheet, 'MIP');

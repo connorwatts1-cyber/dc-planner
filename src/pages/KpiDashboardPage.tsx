@@ -15,7 +15,7 @@ function statusForKpi(value: number) {
 
 function comparableRole(value: string): string {
   const normalized = value.toLowerCase().replace(/[^a-z]+/g, '');
-  return ({ picking: 'pick', pick: 'pick', replenishment: 'replens', replens: 'replens', transitbay: 'bayclearing', transitbayclearing: 'bayclearing', bayclearing: 'bayclearing', transittip: 'transittipping', transittipping: 'transittipping', transitload: 'transitloading', transitloading: 'transitloading' } as Record<string, string>)[normalized] ?? normalized;
+  return ({ picking: 'pick', pick: 'pick', replenishment: 'replens', replens: 'replens', transitbay: 'bayclearingtransit', transitbayclearing: 'bayclearingtransit', bayclearing: 'bayclearingdc', bayclearingdc: 'bayclearingdc', bayclearingtransit: 'bayclearingtransit', transittip: 'transittipping', transittipping: 'transittipping', transitload: 'transitloading', transitloading: 'transitloading' } as Record<string, string>)[normalized] ?? normalized;
 }
 
 export default function KpiDashboardPage() {
@@ -122,18 +122,18 @@ export default function KpiDashboardPage() {
 
       <Grid container className="card-grid" sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', md: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
         <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Required Hours</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{Math.ceil(selectedCalendarRequired)}</Typography><Typography variant="caption">Selected scope</Typography></Paper></Grid>
-        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Scheduled Hours</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{Math.ceil(selectedCalendarScheduled)}</Typography><Typography variant="caption">Selected scope</Typography></Paper></Grid>
+        <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Productive Hours</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{Math.ceil(selectedCalendarScheduled)}</Typography><Typography variant="caption">Selected scope</Typography></Paper></Grid>
         <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Overall KPI</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{selectedCalendarCapability.toFixed(1)}%</Typography><Typography variant="caption">Scheduled / required</Typography></Paper></Grid>
         <Grid item sx={{ width: 'auto', maxWidth: 'none', p: 0 }}><Paper className="kpi-card" sx={{ height: '100%' }}><Typography variant="overline">Hour Variance</Typography><Typography variant="h4" sx={{ fontWeight: 800 }}>{Math.ceil(selectedCalendarVariance)}</Typography><Typography variant="caption">Scheduled minus target</Typography></Paper></Grid>
       </Grid>
 
       <Paper className="table-wrap" sx={{ mt: 3, p: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 800 }}>Role KPI & Productivity Breakdown</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Actual productivity is calculated from selected STP volume divided by selected scheduled hours. Baseline targets come from Settings.</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Actual productivity is calculated from selected STP volume divided by selected productive hours. Baseline targets come from Settings.</Typography>
         <Box sx={{ overflowX: 'auto' }}>
           <Box sx={{ minWidth: 1180 }}>
             <Grid container sx={{ px: 1, py: 1, bgcolor: '#f4f7fb', fontWeight: 800 }}>
-              {['Role', 'KPI', 'Actual / Target Rate', 'Target Hours', 'Scheduled Hours', 'Hours Variance', 'Weeks Achieved', 'Status'].map(label => <Grid item xs={label === 'Role' ? 2 : label === 'Actual / Target Rate' ? 2.2 : 1.3} key={label}><Typography variant="caption">{label}</Typography></Grid>)}
+              {['Role', 'KPI', 'Actual / Target Rate', 'Target Hours', 'Productive Hours', 'Hours Variance', 'Weeks Achieved', 'Status'].map(label => <Grid item xs={label === 'Role' ? 2 : label === 'Actual / Target Rate' ? 2.2 : 1.3} key={label}><Typography variant="caption">{label}</Typography></Grid>)}
             </Grid>
             {roleCards.map(role => (
               <Grid container key={role.id} sx={{ px: 1, py: 1.25, borderBottom: '1px solid #dce3ec', alignItems: 'center' }}>

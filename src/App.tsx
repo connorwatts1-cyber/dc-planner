@@ -13,6 +13,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import DownloadIcon from '@mui/icons-material/Download';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import BeachAccessIcon from '@mui/icons-material/BeachAccess';
+import AssignmentIndIcon from '@mui/icons-material/AssignmentInd';
 import { PlannerProvider, usePlannerContext } from './context/PlannerContext';
 import type { DcCdcScope, RoleScope } from './services/analytics';
 import { getAppTheme } from './theme';
@@ -26,9 +27,11 @@ const LiveScheduleDashboardPage = lazy(() => import('./pages/LiveScheduleDashboa
 const KpiDashboardPage = lazy(() => import('./pages/KpiDashboardPage'));
 const HeadcountPage = lazy(() => import('./pages/HeadcountPage'));
 const HolidayPlanningPage = lazy(() => import('./pages/HolidayPlanningPage'));
+const DayPlannerPage = lazy(() => import('./pages/DayPlannerPage'));
 
 const navigation = [
   { label: 'Planning', path: '/', icon: <FactCheckIcon /> },
+  { label: 'Day Planner', path: '/day-planner', icon: <AssignmentIndIcon /> },
   { label: 'Follow Up', path: '/follow-up', icon: <QueryStatsIcon /> },
   { label: 'Scenario Tool', path: '/scenario-tool', icon: <QueryStatsIcon /> },
   { label: 'KPI Dashboard', path: '/kpi-dashboard', icon: <QueryStatsIcon /> },
@@ -118,6 +121,7 @@ function AppShell() {
             <Suspense fallback={<Typography sx={{ p: 3 }} color="text.secondary">Loading view...</Typography>}>
               <Routes>
                 <Route path="/" element={<PlanningPage />} />
+                <Route path="/day-planner" element={<DayPlannerPage />} />
                 <Route path="/follow-up" element={<FollowUpPage />} />
                 <Route path="/scenario-tool" element={<ScenarioPage />} />
                 <Route path="/kpi-dashboard" element={<KpiDashboardPage />} />

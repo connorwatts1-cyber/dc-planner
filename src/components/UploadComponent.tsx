@@ -47,9 +47,9 @@ export default function UploadComponent({ title, accept = '.csv,.xlsx,.xls,.txt'
           <Button startIcon={<CloudUploadIcon />} variant="contained" sx={{ width: 'fit-content' }} onClick={() => inputRef.current?.click()}>
             Upload
           </Button>
-          {kind === 'stp' && (
-            <Button variant="outlined" color="warning" sx={{ width: 'fit-content' }} onClick={() => clearUploadedFiles('stp')}>
-              Clear STP Cache
+          {(kind === 'stp' || kind === 'schedule') && (
+            <Button variant="outlined" color="warning" sx={{ width: 'fit-content' }} onClick={() => clearUploadedFiles(kind)}>
+              {kind === 'schedule' ? 'Clear schedule cache' : 'Clear STP Cache'}
             </Button>
           )}
         </Stack>

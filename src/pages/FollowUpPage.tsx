@@ -4,7 +4,7 @@ import PageHeader from '../components/PageHeader';
 import KPI from '../components/KPI';
 import TrendChart from '../components/TrendChart';
 import { parseUploadedFile } from '../services/fileParser';
-import { productiveScheduledHours } from '../services/analytics';
+import { productiveHoursByScheduleRecord } from '../services/analytics';
 import { usePlannerContext } from '../context/PlannerContext';
 import WeekCalendarSelector, { PlanningCalendarWeek } from '../components/WeekCalendarSelector';
 import { historicalFollowUpWeeks } from '../historicalFollowUpData';
@@ -267,11 +267,12 @@ export default function FollowUpPage() {
     const date = String(record.date ?? record.shiftdate ?? '');
     return !date || selectedRows.some(week => weekKey(date) === `${week.year}-${week.week}`);
   });
+  const productiveHoursByRecord = productiveHoursByScheduleRecord(selectedScheduleRows, resourceMapping);
   const nonOpsHours = selectedScheduleRows.reduce((total, record) => {
     const role = normalizedRole(record.role ?? record.workrole ?? record.WorkRole);
-    return total + (nonOpsRoles.has(role) ? productiveScheduledHours(record, resourceMapping) : 0);
+    return total + (nonOpsRoles.has(role) ? productiveHoursByRecord.get(record) ?? 0 : 0);
   }, 0);
-  const scheduledRoleHours = selectedScheduleRows.reduce((total, record) => total + productiveScheduledHours(record, resourceMapping), 0);
+  const scheduledRoleHours = selectedScheduleRows.reduce((total, record) => total + (productiveHoursByRecord.get(record) ?? 0), 0);
   const nonOpsPercentage = scheduledRoleHours > 0 ? nonOpsHours / scheduledRoleHours * 100 : undefined;
   const roleBreakdownRows = useMemo(() => {
     const roleLabels: Record<string, string> = {
@@ -281,9 +282,9 @@ export default function FollowUpPage() {
       transittip: 'Transit Tipping',
       transitloading: 'Transit Loading',
       transitload: 'Transit Loading',
-      bayclearing: 'Bayclearing',
-      transitbay: 'Bayclearing',
-      transitbayclearing: 'Bayclearing',
+      bayclearing: 'Bayclearing (DC)',
+      transitbay: 'Bayclearing (Transit)',
+      transitbayclearing: 'Bayclearing (Transit)',
       picking: 'Picking',
       pick: 'Picking',
       replenishment: 'Replens',
@@ -294,13 +295,13 @@ export default function FollowUpPage() {
       const rawRole = String(record.role ?? record.workrole ?? record.WorkRole ?? 'Unmapped role').trim();
       const normalizedRoleName = normalizedRole(rawRole);
       const label = roleLabels[normalizedRoleName] ?? (rawRole || 'Unmapped role');
-      const hours = productiveScheduledHours(record, resourceMapping);
+      const hours = productiveHoursByRecord.get(record) ?? 0;
       if (hours > 0) totals.set(label, (totals.get(label) ?? 0) + hours);
     });
     return Array.from(totals.entries())
       .map(([role, hours]) => ({ role, hours, percentage: scheduledRoleHours > 0 ? hours / scheduledRoleHours * 100 : 0 }))
       .sort((left, right) => right.hours - left.hours);
-  }, [selectedScheduleRows, scheduledRoleHours, resourceMapping]);
+  }, [selectedScheduleRows, scheduledRoleHours, productiveHoursByRecord]);
   const absenceTrend = absenceEstimates.map(item => ({ date: item.week.week, absenceHours: hasMyTimeAbsence ? actualAbsenceByWeek.get(`${item.week.year}-${item.week.week}`) ?? 0 : item.sickness + item.holiday + item.training }));
   const weekKeys = history.map(week => `${week.year}-${week.week}`);
   const duplicateWeeks = weekKeys.filter((week, index) => weekKeys.indexOf(week) !== index);
@@ -442,10 +443,10 @@ export default function FollowUpPage() {
 
       <Box mt={2} className="table-wrap" sx={{ overflowX: 'auto' }}>
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 0.5 }}>Role breakdown ({selectedLabel})</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Productive scheduled hours are grouped from the uploaded schedule for the selected weeks, after the Settings break deduction. Historical M2 totals do not contain role-level hours.</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Productive hours are calculated from the uploaded schedule for the selected weeks after all configured shift-task deductions. Historical M2 totals do not contain role-level hours.</Typography>
         {roleBreakdownRows.length ? <TableContainer>
           <Table size="small" sx={{ minWidth: 620 }}>
-            <TableHead><TableRow>{['Role', 'Productive scheduled hours', '% of role hours'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
+            <TableHead><TableRow>{['Role', 'Productive Hours', '% of productive hours'].map(label => <TableCell key={label} sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{label}</TableCell>)}</TableRow></TableHead>
             <TableBody>{roleBreakdownRows.map(row => <TableRow key={row.role} hover>
               <TableCell sx={{ fontWeight: 700 }}>{row.role}</TableCell>
               <TableCell>{Math.round(row.hours).toLocaleString('en-GB')}</TableCell>

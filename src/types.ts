@@ -58,8 +58,15 @@ export interface ResourceMapping {
   m3PerPallet: number;
   productivityTargetM3PerHour: number;
   breakMinutesPerShift: number;
-  productiveHoursPerShift: number;
-  directTaskAvailability: number;
+  shiftHandoverMinutesPerShift: number;
+  truckInspectionMinutesPerShift: number;
+  palletlessMinutesPerShift: number;
+  travelMinutesPerShift: number;
+  averageRejectionsPerDay: number;
+  rejectionMinutesPerRejection: number;
+  transitBayclearingPalletsPerHour: number;
+  dcBayclearingPalletsPerHour: number;
+  averageShiftHoursPerShift: number;
   shiftDemandProfiles: ShiftDemandProfiles;
   demandStreamProfiles: DemandStreamProfiles;
   monthValues: Record<string, MonthlyResourceMapping>;

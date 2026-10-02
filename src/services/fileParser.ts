@@ -45,7 +45,7 @@ const roleTranslationMap = new Map<string, string>([
   ['bayclearing', 'Bayclearing'],
   ['bayclearm', 'Bayclearing'],
   ['bay', 'Bayclearing'],
-  ['booking', 'Booking Office'],
+  ['booking', 'Booking'],
   ['bookingoffice', 'Booking Office'],
   ['picking', 'Picking'],
   ['pick', 'Pick'],
@@ -269,6 +269,10 @@ function normalizeRoleName(role: string): string {
   return roleTranslationMap.get(normalized) ?? trimmed;
 }
 
+function isDepartmentValue(value: string): boolean {
+  return /(^|[_ -])dep([_ -]|$)|department|dt\d{5,}/i.test(value.trim());
+}
+
 function looksLikeRoleHeader(name: string): boolean {
   return roleHeaderAliases.has(name)
     || /role/.test(name)
@@ -301,14 +305,23 @@ function looksLikeRequiredHoursHeader(name: string): boolean {
 }
 
 function applyField(record: Record<string, string | number>, name: string, cleaned: string) {
-  if (name === 'shiftdate' || name === 'date') {
+  if (name === 'shiftdate' || name === 'date' || name.includes('shiftdate')) {
     record.date = cleaned;
+  } else if (name === 'name' || name === 'employee' || name === 'employeename' || name === 'shiftemployee' || name === 'shiftemployeename' || name === 'shiftperson' || name === 'personname' || name === 'username' || name === 'worker' || name === 'workername' || name === 'coworker' || name === 'coworkername' || (name.includes('employee') && !name.includes('location') && !name.includes('home')) || name.includes('worker')) {
+    record.name = cleaned;
+    record.employeeName = cleaned;
+  } else if (name === 'start' || name === 'starttime' || name === 'shiftstart' || name === 'shiftstarttime' || name.includes('start')) {
+    record.start = cleaned;
+    record.shiftstarttime = cleaned;
+  } else if (name === 'end' || name === 'endtime' || name === 'shiftend' || name === 'shiftendtime' || name.includes('end')) {
+    record.end = cleaned;
+    record.shiftendtime = cleaned;
   } else if (name === 'shiftstarttime' || name === 'shiftendtime') {
     record[name] = cleaned;
-  } else if (name === 'scheduledhours' || name === 'schedulehours' || name === 'plannedhours' || name === 'rosteredhours') {
+  } else if (name === 'scheduledhours' || name === 'schedulehours' || name === 'plannedhours' || name === 'rosteredhours' || name === 'hours') {
     record.scheduledHours = toNumber(cleaned);
     record.hours = toNumber(cleaned);
-  } else if (looksLikeRoleHeader(name)) {
+  } else if (name === 'coreskill' || name === 'task' || name.includes('skill') || name.includes('task') || name.includes('job') || looksLikeRoleHeader(name)) {
     const translated = normalizeRoleName(cleaned);
     if (translated) {
       record.role = translated;
@@ -473,6 +486,19 @@ function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadK
       applyField(record, normalizedKey, cleaned);
     }
 
+    if (kind === 'schedule') {
+      const entries = Object.entries(row).map(([key, value]) => ({ key: normalizeHeader(key), value: String(value ?? '').replace(/"/g, '').trim() }));
+      const employeeEntry = entries.find(entry => /^(shiftemployee|shiftemployeename|shiftperson|personname|username)$/.test(entry.key) && !isDepartmentValue(entry.value))
+        ?? entries.find(entry => /employee|worker|coworker|person|fullname/.test(entry.key) && !/department|dep|organisation|organization|shiftlocation/.test(entry.key) && !isDepartmentValue(entry.value));
+      const fallbackPersonEntry = entries.find(entry => entry.value.includes(',') && !isDepartmentValue(entry.value));
+      const fallbackNameEntry = entries.find(entry => /^name(?:\d+|_\d+)?$/.test(entry.key) && !isDepartmentValue(entry.value));
+      const selectedName = employeeEntry?.value || fallbackPersonEntry?.value || fallbackNameEntry?.value;
+      if (selectedName) {
+        record.name = selectedName;
+        record.employeeName = selectedName;
+      }
+    }
+
     normalizeRecordForKind(record, kind);
 
     if (!record.role || String(record.role).trim() === '') {
@@ -485,6 +511,43 @@ function normalizeObjectRows(rows: Array<Record<string, unknown>>, kind: UploadK
   }
 
   return records;
+}
+
+function parseScheduleWorkbookSheet(sheet: XLSX.WorkSheet, sheetName: string): Array<Record<string, string | number>> {
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: false });
+  const headerIndex = rows.findIndex(row => row.some(value => normalizeHeader(String(value ?? '')) === 'employeename'));
+  if (headerIndex < 0) return [];
+
+  const header = rows[headerIndex].map(value => normalizeHeader(String(value ?? '')));
+  const indexOf = (...names: string[]) => names.map(name => header.indexOf(name)).find(index => index >= 0) ?? -1;
+  const nameIndex = indexOf('shiftemployeename', 'employeename', 'name');
+  const roleIndex = indexOf('task', 'workrole', 'role', 'coreskill');
+  const startIndex = indexOf('start');
+  const endIndex = indexOf('end');
+  const dateRow = rows.slice(0, headerIndex).find(row => row.some(value => /^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(String(value ?? '').trim())));
+  const date = dateRow?.map(value => String(value ?? '').trim()).find(value => /^\d{1,2}[/-]\d{1,2}[/-]\d{4}$/.test(value)) ?? '';
+  const shift = sheetName.replace(/^Mon$/, 'Monday').replace(/^Tue$/, 'Tuesday').replace(/^Wed$/, 'Wednesday').replace(/^Thu$/, 'Thursday').replace(/^Fri$/, 'Friday').replace(/^Sat$/, 'Saturday').replace(/^Sun$/, 'Sunday');
+  const toHours = (value: unknown) => {
+    const text = String(value ?? '').trim();
+    const match = text.match(/^(\d{1,2}):(\d{2})$/);
+    return match ? Number(match[1]) + Number(match[2]) / 60 : 0;
+  };
+
+  return rows.slice(headerIndex + 1).flatMap(row => {
+    const selectedName = String(row[nameIndex] ?? '').trim();
+    const fallbackNameIndex = header.findIndex((key, index) => index !== nameIndex && /name|employee|worker|person|coworker|fullname/.test(key));
+    const fallbackPersonIndex = row.findIndex((value, index) => index !== nameIndex && /,/.test(String(value ?? '')) && !isDepartmentValue(String(value ?? '')));
+    const fallbackName = fallbackNameIndex >= 0 ? String(row[fallbackNameIndex] ?? '').trim() : fallbackPersonIndex >= 0 ? String(row[fallbackPersonIndex] ?? '').trim() : '';
+    const name = isDepartmentValue(selectedName) ? fallbackName : selectedName;
+    const role = String(row[roleIndex] ?? '').trim();
+    if (!name || !role || /^(employee name|name)$/i.test(name)) return [];
+    const start = String(row[startIndex] ?? '').trim();
+    const end = String(row[endIndex] ?? '').trim();
+    const startHours = toHours(start);
+    const endHours = toHours(end);
+    const scheduledHours = startHours || endHours ? Math.max(endHours - startHours, 0) : 0;
+    return [{ name, employeeName: name, role: normalizeRoleName(role), originalRole: role, date, shift, start, end, scheduledHours, hours: scheduledHours }];
+  });
 }
 
 export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast'): Promise<UploadedFileRecord> {
@@ -547,6 +610,10 @@ export async function parseUploadedFile(file: File, kind: UploadKind = 'forecast
 
       for (const sheetName of sheets) {
         const sheet = workbook.Sheets[sheetName];
+        if (kind === 'schedule') {
+          records.push(...parseScheduleWorkbookSheet(sheet, sheetName));
+          continue;
+        }
         const objectRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false });
         records.push(...normalizeObjectRows(objectRows, kind));
       }

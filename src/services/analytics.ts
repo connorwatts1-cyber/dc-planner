@@ -1,7 +1,7 @@
 import { UploadedFileRecord, UploadKind, AbsenceData, LabourData, Role, ResourceMapping } from '../types';
 import { capabilityMetrics, trendData, absenceData, roleDefaults } from '../mockData';
 import { historicalFollowUpWeeks } from '../historicalFollowUpData';
-import { buildStpDemandPlan, getRoleTargetRate, stpRoleMappingConfig } from './stpMappingService';
+import { buildStpDemandPlan, getRoleTargetRate, getRoleTargetUnit, stpRoleMappingConfig } from './stpMappingService';
 
 export interface PlanningSnapshot {
   scheduledHours: number;
@@ -37,6 +37,7 @@ export interface DailyShiftCapacityRow {
 }
 
 export interface DailyShiftCapabilityRow extends DailyShiftCapacityRow {
+  flow?: 'Inbound' | 'Outbound';
   requiredHours: number;
   variance: number;
   capability: number;
@@ -74,14 +75,17 @@ function canonicalRoleName(role: string): string {
   const aliases: Record<string, string> = {
     picking: 'pick',
     pick: 'pick',
-    bayclearing: 'dcbayclear',
-    transitbay: 'dcbayclear',
-    transitbayclearing: 'dcbayclear',
+    bayclearing: 'bayclearingdc',
+    bayclearingdc: 'bayclearingdc',
+    bayclearingtransit: 'bayclearingtransit',
+    transitbay: 'bayclearingtransit',
+    transitbayclearing: 'bayclearingtransit',
     transittip: 'transittipping',
     transittipping: 'transittipping',
     transit: 'transittipping',
     replenishment: 'replens',
-    replen: 'replens'
+    replen: 'replens',
+    bookingoffice: 'bookingoffice'
   };
   return aliases[normalized] ?? normalized;
 }
@@ -120,9 +124,9 @@ function roleKey(record: Record<string, string | number>): string {
     picking: 'Pick',
     transittip: 'Transit Tipping',
     transitload: 'Transit Loading',
-    transitbay: 'Bayclearing',
-    transitbayclearing: 'Bayclearing',
-    bayclearing: 'Bayclearing',
+    transitbay: 'Bayclearing (Transit)',
+    transitbayclearing: 'Bayclearing (Transit)',
+    bayclearing: 'Bayclearing (DC)',
     transit: 'Transit Tipping',
     replenishment: 'Replens',
     replen: 'Replens'
@@ -133,8 +137,10 @@ function roleKey(record: Record<string, string | number>): string {
 function demandRoleForScheduleRole(role: string): string {
   const normalized = canonicalRoleName(role);
 
-  if (normalized === 'banding' || normalized === 'cbpalletless') return 'dctipping';
-  if (normalized === 'transitcycle' || normalized === 'transittransfer' || normalized === 'tramplock' || normalized === 'transitbay' || normalized === 'transitbayclearing') return 'transitloading';
+  if (normalized === 'booking') return 'booking';
+  if (normalized === 'bayclearingtransit' || normalized === 'transitbay' || normalized === 'transitbayclearing') return 'bayclearingtransit';
+  if (normalized === 'bayclearingdc' || normalized === 'dcbayclear' || normalized === 'dcbayclearing' || normalized === 'bayclearing') return 'bayclearingdc';
+  if (normalized === 'transitcycle' || normalized === 'transittransfer') return 'transitloading';
   if (normalized === 'transittip' || normalized === 'transittipping') return 'transittipping';
   if (normalized === 'transitload' || normalized === 'transitloading') return 'transitloading';
   if (normalized === 'dctip' || normalized === 'dctipping') return 'dctipping';
@@ -150,7 +156,9 @@ function lookupRole(rowRole: string, roles: Role[] = roleDefaults): Role | undef
   const aliases: Record<string, string> = {
     pick: 'picking',
     transittipping: 'transittip',
-    dcbayclear: 'bayclearing'
+    dcbayclear: 'bayclearingdc',
+    transitbay: 'bayclearingtransit',
+    transitbayclearing: 'bayclearingtransit'
   };
   const lookupKeys = new Set([normalized, aliases[normalized] ?? normalized]);
   return roles.find(candidate => lookupKeys.has(normalizeRoleName(candidate.role)) || lookupKeys.has(normalizeRoleName(candidate.translation)));
@@ -322,14 +330,8 @@ function recordWeekIndex(record: Record<string, string | number>): number | unde
 
   const dateValue = String(record.date ?? record.shiftdate ?? record.absenceDate ?? '');
   if (dateValue) {
-    const rawDate = dateValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (rawDate) {
-      const date = new Date(Date.UTC(Number(rawDate[1]), Number(rawDate[2]) - 1, Number(rawDate[3])));
-      const planningStart = new Date(Date.UTC(2026, 8, 6));
-      const dayOffset = Math.floor((date.getTime() - planningStart.getTime()) / 86400000);
-      const planningIndex = Math.floor(dayOffset / 7);
-      if (planningIndex >= 0 && planningIndex < planningWeekLabels.length) return planningIndex;
-    }
+    const weekNumber = isoWeekNumber(dateValue);
+    if (weekNumber !== undefined && weekNumber >= 36 && weekNumber <= 43) return weekNumber - 36;
   }
   const weekNumber = isoWeekNumber(dateValue);
   if (weekNumber !== undefined && weekNumber >= 36 && weekNumber <= 43) return weekNumber - 36;
@@ -375,12 +377,60 @@ function trainingRateForDate(dateValue: unknown, resourceMapping?: ResourceMappi
   return resourceMapping.monthValues?.[month]?.training ?? resourceMapping.training;
 }
 
-export function productiveScheduledHours(record: Record<string, string | number>, resourceMapping?: ResourceMapping): number {
-  const hours = normalizeNumber(record.scheduledHours ?? record.hours ?? 0);
+export function productiveScheduledHours(record: Record<string, string | number>, resourceMapping?: ResourceMapping, allocatedRejectionMinutes = 0): number {
+  const recordedHours = normalizeNumber(record.scheduledHours ?? record.hours ?? 0);
+  const grossShiftHours = recordedHours > 0 ? recordedHours : Math.max(resourceMapping?.averageShiftHoursPerShift ?? 7.5, 0);
+  const trainedHours = grossShiftHours * (1 - trainingRateForDate(record.date ?? record.shiftdate, resourceMapping));
+  const additionalMinutes = Math.max(resourceMapping?.shiftHandoverMinutesPerShift ?? 10, 0)
+    + Math.max(resourceMapping?.truckInspectionMinutesPerShift ?? 30, 0)
+    + Math.max(resourceMapping?.palletlessMinutesPerShift ?? 0, 0)
+    + Math.max(resourceMapping?.travelMinutesPerShift ?? 90, 0)
+    + Math.max(allocatedRejectionMinutes, 0);
   const breakHours = Math.max(resourceMapping?.breakMinutesPerShift ?? 45, 0) / 60;
-  const productiveHours = Math.max((hours - breakHours) * (1 - trainingRateForDate(record.date ?? record.shiftdate, resourceMapping)), 0);
-  const cappedHours = Math.min(productiveHours, Math.max(resourceMapping?.productiveHoursPerShift ?? 6.5, 0));
-  return cappedHours * Math.min(Math.max(resourceMapping?.directTaskAvailability ?? 0.9, 0), 1);
+  return Math.max(trainedHours - breakHours - additionalMinutes / 60, 0);
+}
+
+export function productiveHoursByScheduleRecord(records: Array<Record<string, string | number>>, resourceMapping?: ResourceMapping, applyHistoricalCyclesExclusion = true): Map<Record<string, string | number>, number> {
+  const rosteredHoursByDay = new Map<string, number>();
+  records.forEach(record => {
+    const date = scheduleDate(record);
+    const key = date ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : String(record.date ?? record.shiftdate ?? 'unspecified');
+    rosteredHoursByDay.set(key, (rosteredHoursByDay.get(key) ?? 0) + Math.max(normalizeNumber(record.scheduledHours ?? record.hours ?? 0), 0));
+  });
+  const dailyRejectionMinutes = Math.max(resourceMapping?.averageRejectionsPerDay ?? 224, 0) * Math.max(resourceMapping?.rejectionMinutesPerRejection ?? 1.5, 0);
+  const productiveHours = new Map(records.map(record => {
+    const date = scheduleDate(record);
+    const key = date ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : String(record.date ?? record.shiftdate ?? 'unspecified');
+    const rosteredHours = Math.max(normalizeNumber(record.scheduledHours ?? record.hours ?? 0), 0);
+    const totalDayHours = rosteredHoursByDay.get(key) ?? 0;
+    const allocatedRejectionMinutes = totalDayHours > 0 ? dailyRejectionMinutes * rosteredHours / totalDayHours : 0;
+    return [record, productiveScheduledHours(record, resourceMapping, allocatedRejectionMinutes)];
+  }));
+
+  const cycleRowsByWeek = new Map<number, Array<Record<string, string | number>>>();
+  records.forEach(record => {
+    const cycleRole = canonicalRoleName(demandRoleForScheduleRole(roleKey(record))) === 'cycles';
+    const weekIndex = recordWeekIndex(record);
+    if (!cycleRole || weekIndex === undefined) return;
+    const rows = cycleRowsByWeek.get(weekIndex) ?? [];
+    rows.push(record);
+    cycleRowsByWeek.set(weekIndex, rows);
+  });
+
+  if (applyHistoricalCyclesExclusion) cycleRowsByWeek.forEach(cycleRows => {
+    const weeklyProductiveCyclesHours = cycleRows.reduce((total, record) => total + (productiveHours.get(record) ?? 0), 0);
+    const cycleWeekIndex = recordWeekIndex(cycleRows[0]);
+    const weeklyCyclesExclusion = cycleWeekIndex !== undefined && cycleWeekIndex > 2 ? 0 : 1000;
+    const hoursToExclude = Math.min(weeklyCyclesExclusion, weeklyProductiveCyclesHours);
+    if (hoursToExclude <= 0) return;
+    cycleRows.forEach(record => {
+      const rowHours = productiveHours.get(record) ?? 0;
+      const allocatedExclusion = weeklyProductiveCyclesHours > 0 ? hoursToExclude * rowHours / weeklyProductiveCyclesHours : 0;
+      productiveHours.set(record, Math.max(rowHours - allocatedExclusion, 0));
+    });
+  });
+
+  return productiveHours;
 }
 
 function scheduleDate(record: Record<string, string | number>): Date | undefined {
@@ -411,7 +461,9 @@ function shiftForScheduleRecord(record: Record<string, string | number>): DailyS
 
 export function buildDailyShiftCapacityRows(files: UploadedFileRecord[], roles: Role[] = roleDefaults, resourceMapping?: ResourceMapping): DailyShiftCapacityRow[] {
   const grouped = new Map<string, DailyShiftCapacityRow>();
-  files.filter(file => file.kind === 'schedule').flatMap(file => file.records).forEach(record => {
+  const scheduleRecords = files.filter(file => file.kind === 'schedule').flatMap(file => file.records);
+  const productiveHoursByRecord = productiveHoursByScheduleRecord(scheduleRecords, resourceMapping);
+  scheduleRecords.forEach(record => {
     const date = scheduleDate(record);
     const rosteredHours = normalizeNumber(record.scheduledHours ?? record.hours ?? 0);
     if (!date || rosteredHours <= 0) return;
@@ -427,7 +479,7 @@ export function buildDailyShiftCapacityRows(files: UploadedFileRecord[], roles: 
       shift,
       role: displayRole,
       rosteredHours: (existing?.rosteredHours ?? 0) + rosteredHours,
-      productiveHours: (existing?.productiveHours ?? 0) + productiveScheduledHours(record, resourceMapping),
+      productiveHours: (existing?.productiveHours ?? 0) + (productiveHoursByRecord.get(record) ?? 0),
       shiftCount: (existing?.shiftCount ?? 0) + 1
     });
   });
@@ -448,7 +500,7 @@ function stpWeekCode(date: string): string {
   return `${utcDate.getUTCFullYear()}${String(week).padStart(2, '0')}`;
 }
 
-export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles: Role[] = roleDefaults, resourceMapping?: ResourceMapping): DailyShiftCapabilityRow[] {
+export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles: Role[] = roleDefaults, resourceMapping?: ResourceMapping, inboundBacklogTrailers = 0): DailyShiftCapabilityRow[] {
   const rawCapacityRows = buildDailyShiftCapacityRows(files, roles, resourceMapping);
   const capacityRows = Array.from(rawCapacityRows.reduce((grouped, row) => {
     const demandRole = demandRoleForScheduleRole(row.role);
@@ -467,7 +519,9 @@ export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles
   const streamForRole = (role: string) => {
     const normalized = canonicalRoleName(role);
     if (normalized === 'dctipping') return 'dcInbound' as const;
-    if (normalized === 'dcbayclear') return 'bayclearing' as const;
+    if (normalized === 'banding' || normalized === 'booking') return 'dcInbound' as const;
+    if (normalized === 'bayclearingtransit') return 'transitInbound' as const;
+    if (normalized === 'bayclearingdc') return 'dcInbound' as const;
     if (normalized === 'transittipping' || normalized === 'transittip') return 'transitInbound' as const;
     if (normalized === 'dcloading') return 'dcOutbound' as const;
     if (normalized === 'cycles') return 'cycles' as const;
@@ -476,8 +530,35 @@ export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles
   };
   const demandsByWeek = new Map<string, ReturnType<typeof buildStpDemandPlan>>();
   const demandForWeek = (weekCode: string) => {
-    if (!demandsByWeek.has(weekCode)) demandsByWeek.set(weekCode, buildStpDemandPlan(files, stpRoleMappingConfig, roles, [weekCode]));
+    if (!demandsByWeek.has(weekCode)) demandsByWeek.set(weekCode, buildStpDemandPlan(files, stpRoleMappingConfig, roles, [weekCode], resourceMapping));
     return demandsByWeek.get(weekCode)!;
+  };
+  const backlogRequirementsByWeek = new Map<string, Map<string, number>>();
+  const backlogRequirementsForWeek = (weekCode: string) => {
+    if (!backlogRequirementsByWeek.has(weekCode)) {
+      const additions = new Map<string, number>();
+      if (inboundBacklogTrailers > 0 && resourceMapping) {
+        const demandRows = demandForWeek(weekCode).roleDemandRows;
+        const dcInboundVolume = demandRows.find(item => canonicalRoleName(item.role) === 'dctipping')?.volume ?? 0;
+        const transitInboundVolume = demandRows.find(item => canonicalRoleName(item.role) === 'transittipping')?.volume ?? 0;
+        const totalInboundVolume = dcInboundVolume + transitInboundVolume;
+        const backlogVolume = inboundBacklogTrailers * Math.max(resourceMapping.truckVolumeM3, 0);
+        const dcBacklogVolume = totalInboundVolume > 0 ? backlogVolume * dcInboundVolume / totalInboundVolume : backlogVolume;
+        const transitBacklogVolume = totalInboundVolume > 0 ? backlogVolume * transitInboundVolume / totalInboundVolume : 0;
+        const addHours = (role: string, hours: number) => {
+          const key = canonicalRoleName(role);
+          additions.set(key, (additions.get(key) ?? 0) + hours);
+        };
+        addHours('DC Tipping', dcBacklogVolume / Math.max(getRoleTargetRate('DC Tipping', roles), 0.01));
+        addHours('Transit Tipping', transitBacklogVolume / Math.max(getRoleTargetRate('Transit Tipping', roles), 0.01));
+        addHours('Banding', dcBacklogVolume * 0.03 / Math.max(getRoleTargetRate('Banding', roles), 0.01));
+        addHours('Booking', dcBacklogVolume * 0.02 / Math.max(getRoleTargetRate('Booking', roles), 0.01));
+        addHours('Bayclearing (DC)', dcBacklogVolume / Math.max(resourceMapping.m3PerPallet, 0.01) / Math.max(resourceMapping.dcBayclearingPalletsPerHour, 0.01));
+        addHours('Bayclearing (Transit)', transitBacklogVolume * 0.23 / Math.max(resourceMapping.m3PerPallet, 0.01) / Math.max(resourceMapping.transitBayclearingPalletsPerHour, 0.01));
+      }
+      backlogRequirementsByWeek.set(weekCode, additions);
+    }
+    return backlogRequirementsByWeek.get(weekCode)!;
   };
 
   const dates = Array.from(new Set(capacityRows.map(row => row.date)));
@@ -502,7 +583,7 @@ export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles
   }
   const allCapacityRows = [...capacityRows, ...demandBackedRows];
 
-  return allCapacityRows.map(row => {
+  const capabilityRows = allCapacityRows.map(row => {
     const profile = resourceMapping?.demandStreamProfiles?.[streamForRole(row.role)] ?? resourceMapping?.shiftDemandProfiles;
     const profileTotal = profile ? Object.values(profile).reduce((total, day) => total + day.AM + day.PM + day.Night, 0) : 0;
     const dayProfile = profile?.[row.day];
@@ -528,7 +609,8 @@ export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles
     const dayShare = weeklyProfileTotal > 0 ? rawDayTotal / weeklyProfileTotal : 0;
     const shiftIndex = row.shift === 'AM' ? 0 : row.shift === 'PM' ? 1 : 2;
     const dayShiftShare = dayShiftTotal > 0 ? normalizedWeights[shiftIndex] / dayShiftTotal : 0;
-    const requiredHours = demand.requiredHours * dayShare * dayShiftShare;
+    const backlogRequiredHours = backlogRequirementsForWeek(weekCode).get(canonicalRoleName(demandRole)) ?? 0;
+    const requiredHours = (demand.requiredHours + backlogRequiredHours) * dayShare * dayShiftShare;
     if (requiredHours <= 0.01) {
       return { ...row, requiredHours: 0, variance: row.productiveHours, capability: 0, demandAvailable: false };
     }
@@ -537,28 +619,83 @@ export function buildDailyShiftCapabilityRows(files: UploadedFileRecord[], roles
     const variance = row.productiveHours - requiredHours;
     return {
       ...row,
+      flow: demand.flow,
       requiredHours,
       variance,
       capability: Math.max(rawCapability, 0),
       demandAvailable: true
     };
   });
+
+  const rowsByDateAndShift = new Map<string, Map<string, DailyShiftCapabilityRow>>();
+  capabilityRows.forEach(row => {
+    const key = `${row.date}|${row.shift}`;
+    const rolesForShift = rowsByDateAndShift.get(key) ?? new Map<string, DailyShiftCapabilityRow>();
+    rolesForShift.set(canonicalRoleName(row.role), row);
+    rowsByDateAndShift.set(key, rolesForShift);
+  });
+  rowsByDateAndShift.forEach(rolesForShift => {
+    const booking = rolesForShift.get('booking');
+    const dcTipping = rolesForShift.get('dctipping');
+    if (!booking || !dcTipping || !booking.demandAvailable || !dcTipping.demandAvailable) return;
+    const transferredHours = Math.min(booking.requiredHours, dcTipping.productiveHours);
+    const transferredPeople = dcTipping.productiveHours > 0
+      ? dcTipping.shiftCount * transferredHours / dcTipping.productiveHours
+      : 0;
+    booking.productiveHours = transferredHours;
+    booking.shiftCount = transferredPeople;
+    booking.variance = booking.productiveHours - booking.requiredHours;
+    booking.capability = booking.requiredHours > 0 ? booking.productiveHours / booking.requiredHours * 100 : 0;
+    dcTipping.productiveHours -= transferredHours;
+    dcTipping.shiftCount = Math.max(dcTipping.shiftCount - transferredPeople, 0);
+    dcTipping.variance = dcTipping.productiveHours - dcTipping.requiredHours;
+    dcTipping.capability = dcTipping.requiredHours > 0 ? dcTipping.productiveHours / dcTipping.requiredHours * 100 : 0;
+
+    const banding = rolesForShift.get('banding');
+    const dcBayclearing = rolesForShift.get('bayclearingdc');
+    const transitBayclearing = rolesForShift.get('bayclearingtransit');
+    if (!banding || !dcBayclearing || !transitBayclearing || !banding.demandAvailable || !dcBayclearing.demandAvailable || !transitBayclearing.demandAvailable) return;
+    const equalShareHours = Math.min(banding.requiredHours / 2, dcBayclearing.productiveHours, transitBayclearing.productiveHours);
+    if (equalShareHours <= 0) return;
+    const dcPeople = dcBayclearing.productiveHours > 0 ? dcBayclearing.shiftCount * equalShareHours / dcBayclearing.productiveHours : 0;
+    const transitPeople = transitBayclearing.productiveHours > 0 ? transitBayclearing.shiftCount * equalShareHours / transitBayclearing.productiveHours : 0;
+    const bandingTransferredHours = equalShareHours * 2;
+    banding.productiveHours = bandingTransferredHours;
+    banding.shiftCount = dcPeople + transitPeople;
+    banding.variance = banding.productiveHours - banding.requiredHours;
+    banding.capability = banding.requiredHours > 0 ? banding.productiveHours / banding.requiredHours * 100 : 0;
+    dcBayclearing.productiveHours -= equalShareHours;
+    dcBayclearing.shiftCount = Math.max(dcBayclearing.shiftCount - dcPeople, 0);
+    dcBayclearing.variance = dcBayclearing.productiveHours - dcBayclearing.requiredHours;
+    dcBayclearing.capability = dcBayclearing.requiredHours > 0 ? dcBayclearing.productiveHours / dcBayclearing.requiredHours * 100 : 0;
+    transitBayclearing.productiveHours -= equalShareHours;
+    transitBayclearing.shiftCount = Math.max(transitBayclearing.shiftCount - transitPeople, 0);
+    transitBayclearing.variance = transitBayclearing.productiveHours - transitBayclearing.requiredHours;
+    transitBayclearing.capability = transitBayclearing.requiredHours > 0 ? transitBayclearing.productiveHours / transitBayclearing.requiredHours * 100 : 0;
+  });
+
+  return capabilityRows;
 }
 
 export function buildPlanningSnapshot(files: UploadedFileRecord[], roles: Role[] = roleDefaults, selectedWeekIndex: PlanningWeekSelection = 0, resourceMapping?: ResourceMapping): PlanningSnapshot {
   const scopedFiles = filterFilesToSelectedWeeks(files, selectedWeekIndex);
   const scheduleRows = files.filter(file => file.kind === 'schedule').flatMap(file => file.records);
-  const weeklyScheduledHours = weeklyValue(scheduleRows, row => productiveScheduledHours(row, resourceMapping));
+  const productiveHoursByRecord = productiveHoursByScheduleRecord(scheduleRows, resourceMapping);
+  const weeklyScheduledHours = weeklyValue(scheduleRows, row => productiveHoursByRecord.get(row) ?? 0);
   const selectedIndexes = selectedWeekIndexes(selectedWeekIndex);
   const scheduleHoursForScope = selectedWeekIndex === null
     ? weeklyScheduledHours.reduce((total, value, index) => total + (value || historicalScheduleEstimate(index)), 0)
     : selectedIndexes.reduce((total, index) => total + (weeklyScheduledHours[index] || historicalScheduleEstimate(index)), 0);
   const scopedScheduleHours = scheduleHoursForScope > 0
     ? scheduleHoursForScope
-    : scopedFiles.filter(file => file.kind === 'schedule').flatMap(file => file.records).reduce((total, record) => total + productiveScheduledHours(record, resourceMapping), 0);
+    : (() => {
+      const scopedScheduleRows = scopedFiles.filter(file => file.kind === 'schedule').flatMap(file => file.records);
+      const scopedProductiveHours = productiveHoursByScheduleRecord(scopedScheduleRows, resourceMapping);
+      return scopedScheduleRows.reduce((total, record) => total + (scopedProductiveHours.get(record) ?? 0), 0);
+    })();
   const scheduledHours = Math.max(0, scopedScheduleHours) * weekScheduleScale(selectedWeekIndex);
   const plannedAbsenceHours = sumField(scopedFiles, 'absence', ['absenceHours', 'plannedAbsenceHours', 'hours']);
-  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles, selectedStpWeekCodes(selectedWeekIndex));
+  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles, selectedStpWeekCodes(selectedWeekIndex), resourceMapping);
 
   const stpDerivedHours = stpDemandPlan.roleDemandRows.reduce((acc, row) => acc + row.requiredHours, 0);
   const volume = sumField(files, 'stp', ['volume', 'm2', 'm3', 'actualVolume']);
@@ -606,15 +743,16 @@ export function buildPlanningCapabilityRows(files: UploadedFileRecord[], roles: 
 
   const scopedFiles = filterFilesToSelectedWeeks(files, selectedWeekIndex);
   const scheduleRows = scopedFiles.filter(file => file.kind === 'schedule').flatMap(file => file.records);
-  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles, selectedStpWeekCodes(selectedWeekIndex));
+  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles, selectedStpWeekCodes(selectedWeekIndex), resourceMapping);
 
   const scheduledByRole = new Map<string, number>();
   const rawRequiredByRole = new Map<string, number>();
+  const productiveHoursByRecord = productiveHoursByScheduleRecord(scheduleRows, resourceMapping);
 
   for (const record of scheduleRows) {
     const role = roleKey(record);
     const normalizedRole = canonicalRoleName(demandRoleForScheduleRole(role));
-    const hours = productiveScheduledHours(record, resourceMapping);
+    const hours = productiveHoursByRecord.get(record) ?? 0;
     if (hours > 0) {
       scheduledByRole.set(normalizedRole, (scheduledByRole.get(normalizedRole) ?? 0) + hours);
     }
@@ -625,6 +763,29 @@ export function buildPlanningCapabilityRows(files: UploadedFileRecord[], roles: 
     if (row.requiredHours > 0) {
       rawRequiredByRole.set(role, (rawRequiredByRole.get(role) ?? 0) + row.requiredHours);
     }
+  }
+
+  const bookingRoleKey = canonicalRoleName('Booking');
+  const dcTippingRoleKey = canonicalRoleName('DC Tipping');
+  const bookingRequiredHours = rawRequiredByRole.get(bookingRoleKey) ?? 0;
+  const dcTippingScheduledHours = scheduledByRole.get(dcTippingRoleKey) ?? 0;
+  const bookingTransferredHours = Math.min(bookingRequiredHours, dcTippingScheduledHours);
+  if (bookingTransferredHours > 0) {
+    scheduledByRole.set(bookingRoleKey, bookingTransferredHours);
+    scheduledByRole.set(dcTippingRoleKey, dcTippingScheduledHours - bookingTransferredHours);
+  }
+
+  const bandingRoleKey = canonicalRoleName('Banding');
+  const dcBayclearingRoleKey = canonicalRoleName('Bayclearing (DC)');
+  const transitBayclearingRoleKey = canonicalRoleName('Bayclearing (Transit)');
+  const bandingRequiredHours = rawRequiredByRole.get(bandingRoleKey) ?? 0;
+  const dcBayclearingScheduledHours = scheduledByRole.get(dcBayclearingRoleKey) ?? 0;
+  const transitBayclearingScheduledHours = scheduledByRole.get(transitBayclearingRoleKey) ?? 0;
+  const equalBayclearingTransfer = Math.min(bandingRequiredHours / 2, dcBayclearingScheduledHours, transitBayclearingScheduledHours);
+  if (equalBayclearingTransfer > 0) {
+    scheduledByRole.set(bandingRoleKey, equalBayclearingTransfer * 2);
+    scheduledByRole.set(dcBayclearingRoleKey, dcBayclearingScheduledHours - equalBayclearingTransfer);
+    scheduledByRole.set(transitBayclearingRoleKey, transitBayclearingScheduledHours - equalBayclearingTransfer);
   }
 
   const totalScheduledHours = Array.from(scheduledByRole.values()).reduce((total, hours) => total + hours, 0);
@@ -664,7 +825,9 @@ export function buildPlanningCapabilityRows(files: UploadedFileRecord[], roles: 
     return {
       id: role,
       role: displayRole,
+      flow: demand?.flow,
       volume: demand?.volume ?? 0,
+      targetUnit: demand?.targetUnit ?? getRoleTargetUnit(role),
       targetRate,
       requiredHours,
       scheduledHours,
@@ -690,15 +853,16 @@ export function buildPlanningTrendData(files: UploadedFileRecord[], roles: Role[
   }
 
   const scheduleRows = files.filter(file => file.kind === 'schedule').flatMap(file => file.records);
-  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles);
+  const stpDemandPlan = buildStpDemandPlan(files, stpRoleMappingConfig, roles, undefined, resourceMapping);
 
-  const weeklyScheduledHours = weeklyValue(scheduleRows, row => productiveScheduledHours(row, resourceMapping));
+  const productiveHoursByRecord = productiveHoursByScheduleRecord(scheduleRows, resourceMapping);
+  const weeklyScheduledHours = weeklyValue(scheduleRows, row => productiveHoursByRecord.get(row) ?? 0);
   const totalRequiredHours = stpDemandPlan.roleDemandRows.reduce((acc, row) => acc + row.requiredHours, 0);
   const out = planningWeekLabels.map((label, idx) => {
     const scheduledHours = weeklyScheduledHours[idx] || historicalScheduleEstimate(idx);
     const weekDemand = buildStpDemandPlan(files, stpRoleMappingConfig, roles, [
       `2026${String(36 + idx).padStart(2, '0')}`
-    ]);
+    ], resourceMapping);
     const requiredHours = weekDemand.roleDemandRows.reduce((total, row) => total + row.requiredHours, 0);
     const calculatedRequired = requiredHours || 600;
 
@@ -768,12 +932,12 @@ export function buildPlanningAbsenceBreakdown(files: UploadedFileRecord[], selec
   return Array.from(byType.entries()).map(([absenceType, absenceHours]) => ({ absenceType, absenceHours: absenceHours * weekScale(selectedWeekIndex) }));
 }
 
-export function buildFollowUpYtdSnapshot(files: UploadedFileRecord[], roles: Role[] = roleDefaults): FollowUpSnapshot {
+export function buildFollowUpYtdSnapshot(files: UploadedFileRecord[], roles: Role[] = roleDefaults, resourceMapping?: ResourceMapping): FollowUpSnapshot {
   const paidHours = sumField(files, 'paid-hours', ['paidHours', 'hours', 'workedHours']);
   const actualVolume = sumField(files, 'actual-volume', ['actualVolume', 'volume', 'm2']);
   const actualAbsenceHours = sumField(files, 'absence', ['absenceHours', 'hours']);
   const stpVolume = sumField(files, 'stp', ['volume', 'm2', 'actualVolume']);
-  const stpDerivedHours = buildStpDemandPlan(files, stpRoleMappingConfig, roles).roleDemandRows
+  const stpDerivedHours = buildStpDemandPlan(files, stpRoleMappingConfig, roles, undefined, resourceMapping).roleDemandRows
     .reduce((acc, row) => acc + row.requiredHours, 0);
 
   const productivityAssumption = roles.length ? roles.reduce((acc, role) => acc + Math.max(role.palletsPerHour, 1), 0) / roles.length : 22.5;

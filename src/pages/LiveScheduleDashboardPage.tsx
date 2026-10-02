@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Box, Card, CardContent, Chip, Grid, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import { Alert, Box, Card, CardContent, Chip, Grid, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 import { buildDailyShiftCapabilityRows } from '../services/analytics';
 import { usePlannerContext } from '../context/PlannerContext';
@@ -24,15 +24,51 @@ export default function LiveScheduleDashboardPage() {
   const [selectedDay, setSelectedDay] = useState(0);
   const [capacityShift, setCapacityShift] = useState<'AM' | 'PM' | 'Night'>('AM');
   const [cellDisplayMode, setCellDisplayMode] = useState<'hours' | 'headcount'>('hours');
+  const [inboundBacklogTrailers, setInboundBacklogTrailers] = useState(0);
   const rows = period === 'current' ? currentWeek : nextWeek;
   const selected = rows[selectedDay] ?? rows[0];
-  const dailyShiftCapability = buildDailyShiftCapabilityRows(scopedUploadedFiles, roles, resourceMapping);
+  const dailyShiftCapability = buildDailyShiftCapabilityRows(scopedUploadedFiles, roles, resourceMapping, inboundBacklogTrailers);
   const latestScheduleDates = Array.from(new Set(dailyShiftCapability.map(row => row.date))).slice(-7);
   const latestDailyShiftCapability = dailyShiftCapability.filter(row => latestScheduleDates.includes(row.date));
   const selectedShiftRows = latestDailyShiftCapability.filter(row => row.shift === capacityShift && row.demandAvailable);
   const selectedShiftRoles = Array.from(new Set(selectedShiftRows.map(row => row.role))).sort((left, right) => left.localeCompare(right));
-  const selectedShiftTotals = selectedShiftRows.reduce((total, row) => ({ productive: total.productive + row.productiveHours, required: total.required + row.requiredHours, headcount: total.headcount + row.shiftCount }), { productive: 0, required: 0, headcount: 0 });
-  const selectedShiftCapability = selectedShiftTotals.required > 0 ? selectedShiftTotals.productive / selectedShiftTotals.required * 100 : 0;
+  const selectedShiftFlowGroups = (['Inbound', 'Outbound'] as const).map(flow => ({
+    flow,
+    roles: selectedShiftRoles.filter(role => selectedShiftRows.some(row => row.role === role && row.flow === flow))
+  })).filter(group => group.roles.length > 0);
+  const capabilityRows = selectedShiftRows.map(row => {
+    const dailyShiftCount = latestDailyShiftCapability.filter(item => item.date === row.date).reduce((total, item) => total + item.shiftCount, 0);
+    const rejectionMinutesPerPerson = dailyShiftCount > 0
+      ? resourceMapping.averageRejectionsPerDay * resourceMapping.rejectionMinutesPerRejection / dailyShiftCount
+      : 0;
+    const date = new Date(`${row.date}T00:00:00`);
+    const month = date.toLocaleString('en-GB', { month: 'long' });
+    const trainingRate = resourceMapping.monthValues?.[month]?.training ?? resourceMapping.training;
+    const grossShiftHours = resourceMapping.averageShiftHoursPerShift * (1 - trainingRate);
+    const nonProductiveHours = (resourceMapping.breakMinutesPerShift + resourceMapping.shiftHandoverMinutesPerShift + resourceMapping.truckInspectionMinutesPerShift + resourceMapping.palletlessMinutesPerShift + resourceMapping.travelMinutesPerShift + rejectionMinutesPerPerson) / 60;
+    const configuredHoursPerPerson = Math.max(grossShiftHours - nonProductiveHours, 0);
+    const realizedHoursPerPerson = row.shiftCount > 0 ? row.productiveHours / row.shiftCount : 0;
+    const productiveHoursPerPerson = realizedHoursPerPerson > 0 ? realizedHoursPerPerson : configuredHoursPerPerson;
+    const isSharedBookingTask = String(row.role).toLowerCase() === 'booking';
+    const requiredHeadcount = row.requiredHours > 0 && productiveHoursPerPerson > 0
+      ? isSharedBookingTask
+        ? row.requiredHours / productiveHoursPerPerson
+        : Math.ceil(row.requiredHours / productiveHoursPerPerson)
+      : 0;
+    const actualPeople = row.shiftCount > 0 ? Math.ceil(row.shiftCount) : 0;
+    const requiredPeople = requiredHeadcount > 0 ? Math.ceil(requiredHeadcount) : 0;
+    const capability = requiredPeople > 0 ? actualPeople / requiredPeople * 100 : 0;
+    return { ...row, requiredHeadcount, capability };
+  });
+  const selectedShiftTotals = capabilityRows.reduce((total, row) => ({
+    productive: total.productive + row.productiveHours,
+    required: total.required + row.requiredHours,
+    headcount: total.headcount + row.shiftCount,
+    requiredHeadcount: total.requiredHeadcount + row.requiredHeadcount
+  }), { productive: 0, required: 0, headcount: 0, requiredHeadcount: 0 });
+  const selectedShiftCapability = selectedShiftTotals.requiredHeadcount > 0
+    ? selectedShiftTotals.headcount / selectedShiftTotals.requiredHeadcount * 100
+    : 0;
   const unavailableRoleRows = latestDailyShiftCapability.filter(row => row.shift !== 'Unspecified' && !row.demandAvailable);
   const displayDate = (date: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(`${date}T00:00:00`));
   return (
@@ -75,25 +111,27 @@ export default function LiveScheduleDashboardPage() {
               <ToggleButton value="PM">PM</ToggleButton>
               <ToggleButton value="Night">Night</ToggleButton>
             </ToggleButtonGroup>
+            <TextField type="number" size="small" label="Inbound backlog trailers" value={inboundBacklogTrailers} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value)) setInboundBacklogTrailers(Math.max(Math.round(value), 0)); }} inputProps={{ min: 0, step: 1 }} helperText={`Adds inbound demand using ${resourceMapping.truckVolumeM3} m3/trailer, spread across the displayed week.`} sx={{ minWidth: 220 }} />
           </Stack>
           {selectedShiftRows.length ? <>
             <Grid container spacing={1.5} sx={{ mb: 2 }}>
               <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Required hours</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.required.toFixed(1)}</Typography></Paper></Grid>
               <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Productive hours</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.productive.toFixed(1)}</Typography></Paper></Grid>
-              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Headcount</Typography><Typography variant="h6" fontWeight={800}>{selectedShiftTotals.headcount}</Typography></Paper></Grid>
+              <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25 }}><Typography variant="caption" color="text.secondary">Headcount</Typography><Typography variant="h6" fontWeight={800}>{Math.round(selectedShiftTotals.headcount)}</Typography></Paper></Grid>
               <Grid item xs={12} sm={3}><Paper variant="outlined" sx={{ p: 1.25, bgcolor: selectedShiftCapability >= 100 ? '#edf7f0' : '#fff1f1' }}><Typography variant="caption" color="text.secondary">Capability</Typography><Typography variant="h6" fontWeight={800} color={selectedShiftCapability >= 100 ? 'success.main' : 'error.main'}>{selectedShiftCapability.toFixed(1)}%</Typography></Paper></Grid>
             </Grid>
             <TableContainer><Table size="small" sx={{ minWidth: 980 }}>
               <TableHead><TableRow sx={{ bgcolor: '#f4f7fb' }}><TableCell sx={{ fontWeight: 800, minWidth: 150 }}>Role</TableCell>{latestScheduleDates.map(date => <TableCell key={date} align="center" sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{displayDate(date)}</TableCell>)}</TableRow></TableHead>
-              <TableBody>{selectedShiftRoles.map(role => <TableRow key={role} hover><TableCell sx={{ fontWeight: 800 }}>{role}</TableCell>{latestScheduleDates.map(date => {
-                const row = selectedShiftRows.find(item => item.role === role && item.date === date);
+              <TableBody>{selectedShiftFlowGroups.flatMap(group => [
+                <TableRow key={`${group.flow}-header`}><TableCell colSpan={latestScheduleDates.length + 1} sx={{ bgcolor: '#e8eef7', color: '#172b55', fontWeight: 800 }}>{group.flow}</TableCell></TableRow>,
+                ...group.roles.map(role => <TableRow key={role} hover><TableCell sx={{ fontWeight: 800 }}>{role}</TableCell>{latestScheduleDates.map(date => {
+                const row = capabilityRows.find(item => item.role === role && item.date === date);
                 if (!row) return <TableCell key={date} align="center" sx={{ color: 'text.disabled' }}>—</TableCell>;
                 const under = row.capability < 100;
-                const productiveHeadcount = row.shiftCount;
-                const hoursPerPerson = Math.max(resourceMapping.productiveHoursPerShift * resourceMapping.directTaskAvailability, 0.01);
-                const requiredHeadcount = row.requiredHours > 0 ? Math.ceil(row.requiredHours / hoursPerPerson) : 0;
-                return <TableCell key={date} align="center" onClick={() => setCellDisplayMode(mode => mode === 'hours' ? 'headcount' : 'hours')} sx={{ minWidth: 112, bgcolor: under ? '#fff4f3' : '#eff8f2', cursor: 'pointer' }}><Typography variant="body2" fontWeight={800} color={under ? 'error.main' : 'success.main'}>{row.capability.toFixed(0)}%</Typography><Typography variant="caption" color="text.secondary">{cellDisplayMode === 'hours' ? `${row.productiveHours.toFixed(1)} / ${row.requiredHours.toFixed(1)}h` : `${productiveHeadcount} / ${requiredHeadcount} people`}</Typography></TableCell>;
-              })}</TableRow>)}</TableBody>
+                const actualPeople = row.shiftCount > 0 ? Math.ceil(row.shiftCount) : 0;
+                const requiredPeople = row.requiredHeadcount > 0 ? Math.ceil(row.requiredHeadcount) : 0;
+                return <TableCell key={date} align="center" onClick={() => setCellDisplayMode(mode => mode === 'hours' ? 'headcount' : 'hours')} sx={{ minWidth: 112, bgcolor: under ? '#fff4f3' : '#eff8f2', cursor: 'pointer' }}><Typography variant="body2" fontWeight={800} color={under ? 'error.main' : 'success.main'}>{row.capability.toFixed(0)}%</Typography><Typography variant="caption" color="text.secondary">{cellDisplayMode === 'hours' ? `${row.productiveHours.toFixed(1)} / ${row.requiredHours.toFixed(1)}h` : `${actualPeople} / ${requiredPeople} people`}</Typography></TableCell>;
+              })}</TableRow>)] )}</TableBody>
             </Table></TableContainer>
             {unavailableRoleRows.length > 0 && <Alert severity="info" sx={{ mt: 2 }}>{unavailableRoleRows.length} scoped schedule rows have no matched STP demand or no usable shift classification, so they are excluded from this capability matrix.</Alert>}
           </> : <Alert severity="info">Upload a scoped operational schedule with dates, start times, roles, and scheduled hours, plus matching STP data, to calculate the capability matrix.</Alert>}

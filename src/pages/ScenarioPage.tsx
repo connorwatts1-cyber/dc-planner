@@ -63,7 +63,7 @@ export default function ScenarioPage() {
   const planning = buildPlanningSnapshot(uploadedFiles, roles, analyticsWeekIndex, resourceMapping);
   const tableRows = buildPlanningCapabilityRows(uploadedFiles, roles, analyticsWeekIndex, resourceMapping);
   const trendData = filterPlanningWeeks(buildPlanningTrendData(uploadedFiles, roles, analyticsWeekIndex, resourceMapping), selectedWeekIndices);
-  const stpDemand = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`));
+  const stpDemand = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, allWeeksSelected ? undefined : selectedWeekIndices.map(index => `2026${String(36 + index).padStart(2, '0')}`), resourceMapping);
   const stpInboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Tipping' || row.role === 'Transit Tipping').reduce((total, row) => total + row.volume, 0);
   const stpOutboundVolume = stpDemand.roleDemandRows.filter(row => row.role === 'DC Loading' || row.role === 'Transit Loading').reduce((total, row) => total + row.volume, 0);
   const truckVolumeAssumption = Math.max(resourceMapping.truckVolumeM3, 0.01);
@@ -113,7 +113,7 @@ export default function ScenarioPage() {
 
       <Grid container spacing={2} className="card-grid">
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Required Hours" value={Math.round(selectedRequiredHours)} subtitle="Current" /></Grid>
-        <Grid item xs={12} sm={6} md={2.4}><KPI title="Scheduled Hours" value={Math.round(selectedScheduledHours)} subtitle="Rostered" /></Grid>
+        <Grid item xs={12} sm={6} md={2.4}><KPI title="Productive Hours" value={Math.round(selectedScheduledHours)} subtitle="After shift deductions" /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Capability %" value={`${Math.round(selectedCapability * 10) / 10}%`} subtitle="Current" /></Grid>
         <Grid item xs={12} sm={6} md={2.4}><KPI title="Variance" value={Math.round(selectedVariance)} subtitle="Base" /></Grid>
       </Grid>
@@ -185,7 +185,7 @@ export default function ScenarioPage() {
             <Box mt={2}>
               <Stack spacing={1}>
                 <Typography>Required Hours: {Math.round(selectedRequiredHours)}</Typography>
-                <Typography>Scheduled Hours: {Math.round(selectedScheduledHours)}</Typography>
+                <Typography>Productive Hours: {Math.round(selectedScheduledHours)}</Typography>
                 <Typography>Capability %: {`${Math.round(selectedCapability * 10) / 10}%`}</Typography>
                 <Typography>Variance: {Math.round(selectedVariance)}</Typography>
               </Stack>
@@ -198,7 +198,7 @@ export default function ScenarioPage() {
             <Box mt={2}>
               <Stack spacing={1}>
                 <Typography>Required Hours: {Math.round(scenario.scenarioRequiredHours)}</Typography>
-                <Typography>Scheduled Hours: {Math.round(scenario.scenarioScheduledHours)}</Typography>
+                <Typography>Productive Hours: {Math.round(scenario.scenarioScheduledHours)}</Typography>
                 <Typography>Capability %: {`${Math.round(scenario.scenarioCapability * 10) / 10}%`}</Typography>
                 <Typography>Variance: {Math.round(scenario.scenarioVariance)}</Typography>
                 <Typography>Status: {scenario.needStatus}</Typography>

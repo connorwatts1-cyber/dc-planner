@@ -55,7 +55,7 @@ export async function exportKpiPowerPoint(summary: KpiExportSummary, roles: KpiE
   summarySlide.addText(summary.label, { x: 0.45, y: 0.65, w: 12.3, h: 0.25, fontSize: 10, color: grey });
   const cards = [
     ['Required Hours', Math.ceil(summary.requiredHours).toLocaleString()],
-    ['Scheduled Hours', Math.ceil(summary.scheduledHours).toLocaleString()],
+    ['Productive Hours', Math.ceil(summary.scheduledHours).toLocaleString()],
     ['Overall KPI', `${summary.capability.toFixed(1)}%`],
     ['Hour Variance', Math.ceil(summary.variance).toLocaleString()]
   ];
@@ -66,7 +66,7 @@ export async function exportKpiPowerPoint(summary: KpiExportSummary, roles: KpiE
     summarySlide.addText(value, { x: x + 0.15, y: 1.72, w: 2.4, h: 0.35, fontSize: 20, color: navy, bold: true });
   });
   summarySlide.addText('Status rules', { x: 0.45, y: 2.85, w: 1.5, h: 0.25, fontSize: 12, bold: true, color: navy });
-  summarySlide.addText('Red: below 100% productivity   |   Green: 100% or above   |   KPI calculated from STP volume, scheduled hours and Settings baseline', { x: 0.45, y: 3.2, w: 12, h: 0.3, fontSize: 11, color: grey });
+  summarySlide.addText('Red: below 100% productivity   |   Green: 100% or above   |   KPI calculated from STP volume, productive hours and Settings baseline', { x: 0.45, y: 3.2, w: 12, h: 0.3, fontSize: 11, color: grey });
   summarySlide.addText('Role KPI Snapshot', { x: 0.45, y: 4.05, w: 2.5, h: 0.3, fontSize: 15, bold: true, color: navy });
   summarySlide.addTable(roles.map(role => [role.role, `${role.productivityKpi.toFixed(1)}%`, `${Math.ceil(role.achievedWeeks)} weeks`, role.status.label]) as any, {
     x: 0.45, y: 4.45, w: 12, h: 1.7,
@@ -84,7 +84,7 @@ export async function exportKpiPowerPoint(summary: KpiExportSummary, roles: KpiE
   detailSlide.addText('Role KPI Detail', { x: 0.45, y: 0.25, w: 12, h: 0.35, fontSize: 20, bold: true, color: navy });
   detailSlide.addText(summary.label, { x: 0.45, y: 0.65, w: 12, h: 0.25, fontSize: 10, color: grey });
   detailSlide.addTable([
-    ['Role', 'KPI %', 'Actual rate', 'Target rate', 'Target hours', 'Scheduled', 'Variance', 'Achieved'],
+    ['Role', 'KPI %', 'Actual rate', 'Target rate', 'Target hours', 'Productive', 'Variance', 'Achieved'],
     ...roles.map(role => [role.role, `${role.productivityKpi.toFixed(1)}%`, role.actualProductivity.toFixed(1), role.targetProductivity.toFixed(1), Math.ceil(role.targetHours), Math.ceil(role.scheduledHours), Math.ceil(role.hourVariance), `${role.achievedWeeks}`])
   ] as any, {
     x: 0.35, y: 1.1, w: 12.55, h: 2.35,

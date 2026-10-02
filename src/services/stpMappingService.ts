@@ -11,6 +11,7 @@ export type StpRoleMappingConfig = Record<string, string[]>;
 
 export interface StpDemandRoleRow {
   role: string;
+  flow: 'Inbound' | 'Outbound';
   volume: number;
   targetRate: number;
   targetUnit?: 'm3/h' | 'pallets/h' | 'OL/h';
@@ -38,37 +39,64 @@ export interface ForecastClassificationSummary {
 }
 
 export const stpRoleMappingConfig: StpRoleMappingConfig = {
-  Bayclearing: ['Additional Bay Clear Queue Corrected'],
-  Replens: [],
-  Cycles: ['Full Pallet OL'],
-  Pick: ['Total OL'],
+  'Bayclearing (Transit)': ['Total Transit IN'],
+  'Bayclearing (DC)': ['Total DC In to Stock (Queue Corrected)'],
+  Replens: ['Picking OL'],
+  Cycles: ['Total Outbound'],
+  Pick: ['Picking OL'],
   'Transit Tipping': ['Total Transit IN'],
   'DC Tipping': ['Total DC In to Stock (Queue Corrected)'],
-  'DC Loading': ['Total DC Out from Stock'],
-  'Transit Loading': ['DC Out Transit'],
-  Banding: ['Banding / Strapping'],
-  'CB Palletless': ['CB Palletless'],
-  'Transit Cycle': ['Transit Cycle'],
-  'Transit Transfer': ['Transit Transfer'],
-  'Transit Bay': ['Bayclear / Transit Bay'],
-  'Tram Plock': ['Tram Plock']
+  'DC Loading': ['DC Out from Stock'],
+  'Transit Loading': ['Total DC Out Transit'],
+  'Tram Plock': ['Picking m3'],
+  Banding: ['Total DC In to Stock (Queue Corrected)'],
+  Booking: ['Total DC In to Stock (Queue Corrected)']
 };
 
+interface StpDemandTask {
+  id: string;
+  role: string;
+  flow: 'Inbound' | 'Outbound';
+  measure: string;
+  share: number;
+  targetUnit?: 'm3/h' | 'pallets/h' | 'OL/h';
+  rateSetting?: 'transitBayclearingPalletsPerHour' | 'dcBayclearingPalletsPerHour';
+}
+
+export const stpDemandTasks: StpDemandTask[] = [
+  { id: 'dc-tipping', role: 'DC Tipping', flow: 'Inbound', measure: 'Total DC In to Stock (Queue Corrected)', share: 1 },
+  { id: 'transit-tipping', role: 'Transit Tipping', flow: 'Inbound', measure: 'Total Transit IN', share: 1 },
+  { id: 'banding', role: 'Banding', flow: 'Inbound', measure: 'Total DC In to Stock (Queue Corrected)', share: 0.03 },
+  { id: 'booking', role: 'Booking', flow: 'Inbound', measure: 'Total DC In to Stock (Queue Corrected)', share: 0.02 },
+  { id: 'transit-bayclear', role: 'Bayclearing (Transit)', flow: 'Inbound', measure: 'Total Transit IN', share: 0.23, targetUnit: 'pallets/h', rateSetting: 'transitBayclearingPalletsPerHour' },
+  { id: 'dc-bayclear', role: 'Bayclearing (DC)', flow: 'Inbound', measure: 'Total DC In to Stock (Queue Corrected)', share: 1, targetUnit: 'pallets/h', rateSetting: 'dcBayclearingPalletsPerHour' },
+  { id: 'dc-loading', role: 'DC Loading', flow: 'Outbound', measure: 'DC Out from Stock', share: 1 },
+  { id: 'transit-loading', role: 'Transit Loading', flow: 'Outbound', measure: 'Total DC Out Transit', share: 1 },
+  { id: 'tram-plock', role: 'Tram Plock', flow: 'Outbound', measure: 'Picking m3', share: 1 },
+  { id: 'picking', role: 'Pick', flow: 'Outbound', measure: 'Picking OL', share: 1 },
+  { id: 'replens', role: 'Replens', flow: 'Outbound', measure: 'Picking OL', share: 0.25 },
+  { id: 'cycles', role: 'Cycles', flow: 'Outbound', measure: 'Total Outbound', share: 1 }
+];
+
 const defaultTargetRates: Record<string, number> = {
-  Replens: 7,
-  Cycles: 15.435,
-  Pick: 109.8,
+  Replens: 10.5,
+  Cycles: 24.19,
+  Pick: 22.5,
   'Transit Tipping': 28,
-  'DC Bay Clear': 23.5,
-  'DC Tipping': 26,
-  'DC Loading': 25.5,
-  'Transit Loading': 25.5,
+  'DC Bay Clear': 28.7,
+  Bayclearing: 28.7,
+  'Bayclearing (Transit)': 37,
+  'Bayclearing (DC)': 35,
+  'DC Tipping': 32.8,
+  'DC Loading': 34.44,
+  'Transit Loading': 35.26,
+  Booking: 49.2,
   Banding: 35.34,
   'CB Palletless': 49.2,
   'Transit Cycle': 24.19,
   'Transit Transfer': 24.19,
   'Transit Bay': 27,
-  'Tram Plock': 27
+  'Tram Plock': 22.14
 };
 
 const roleAliases: Record<string, string> = {
@@ -76,18 +104,21 @@ const roleAliases: Record<string, string> = {
   dctip: 'DC Tipping',
   dcloading: 'DC Loading',
   dcload: 'DC Loading',
-  bayclearing: 'Bayclearing',
-  bayclear: 'Bayclearing',
-  dcbayclear: 'Bayclearing',
-  dcbayclearing: 'Bayclearing',
+  bayclearing: 'Bayclearing (DC)',
+  bayclear: 'Bayclearing (DC)',
+  dcbayclear: 'Bayclearing (DC)',
+  dcbayclearing: 'Bayclearing (DC)',
+  bayclearingtransit: 'Bayclearing (Transit)',
+  transitbayclearing: 'Bayclearing (Transit)',
+  bayclearingdc: 'Bayclearing (DC)',
+  dcbayclearingrole: 'Bayclearing (DC)',
   transittipping: 'Transit Tipping',
   transittip: 'Transit Tipping',
   transitloading: 'Transit Loading',
   transitload: 'Transit Loading',
   transitcycle: 'Transit Cycle',
   transittransfer: 'Transit Transfer',
-  transitbay: 'Transit Bay',
-  transitbayclearing: 'Transit Bay',
+  transitbay: 'Bayclearing (Transit)',
   tramplock: 'Tram Plock',
   banding: 'Banding',
   cbpalletless: 'CB Palletless',
@@ -95,7 +126,8 @@ const roleAliases: Record<string, string> = {
   replenishment: 'Replens',
   cycles: 'Cycles',
   pick: 'Pick',
-  picking: 'Pick'
+  picking: 'Pick',
+  booking: 'Booking'
 };
 
 const supportRoleDemandShare: Record<string, number> = {
@@ -233,10 +265,7 @@ function lookupRole(role: string, roles: Role[] = roleDefaults): Role | undefine
 }
 
 export function aggregateDemandRole(role: string): string {
-  const normalized = normalizeRoleKey(String(role ?? ''));
-  if (normalized === 'banding' || normalized === 'cbpalletless') return 'DC Tipping';
-  if (normalized === 'transitcycle' || normalized === 'transittransfer' || normalized === 'tramplock' || normalized === 'transitbay') return 'Transit Loading';
-  return String(role ?? '').trim() || 'Unmapped';
+  return resolveMappedRoleName(role) || 'Unmapped';
 }
 
 export function supportRoleDemandWeight(role: string): number {
@@ -245,8 +274,35 @@ export function supportRoleDemandWeight(role: string): number {
 
 export function getRoleTargetRate(role: string, roles: Role[] = roleDefaults): number {
   const matchingRole = lookupRole(role, roles);
-  if (normalizeRoleKey(role) === 'pick' && matchingRole && matchingRole.targetRate === undefined && matchingRole.baselineValue === 24.5) return 109.8;
-  if (normalizeRoleKey(role) === 'cycles') return defaultTargetRates.Cycles;
+  const normalized = normalizeRoleKey(role);
+  if (matchingRole && getRoleTargetUnit(role) === 'm3/h' && matchingRole.palletsPerHour > 0) {
+    const palletSize = matchingRole.m3PerPallet > 0 ? matchingRole.m3PerPallet : 0.82;
+    return Math.round(matchingRole.palletsPerHour * palletSize * 100) / 100;
+  }
+  const workbookDefaults: Record<string, number> = {
+    dctipping: 32.8,
+    transittipping: 28,
+    banding: 35.34,
+    booking: 49.2,
+    bookingoffice: 49.2,
+    bayclearing: 28.7,
+    bayclearingtransit: 37,
+    bayclearingdc: 35,
+    dcloading: 34.44,
+    transitloading: 35.26,
+    picking: 22.5,
+    pick: 22.5,
+    replenishment: 10.5,
+    replens: 10.5,
+    cycles: 24.19,
+    tramplock: 22.14
+  };
+  const oldDefaults: Record<string, number[]> = {
+    dctipping: [40, 26], transittipping: [34, 28], bayclearing: [35, 23.5], dcloading: [42, 25.5],
+    transitloading: [43, 25.5], picking: [109.8], pick: [109.8], cycles: [13.94, 15.435], replens: [7]
+  };
+  const workbookDefault = workbookDefaults[normalized];
+  if (matchingRole && workbookDefault !== undefined && oldDefaults[normalized]?.includes(matchingRole.baselineValue) && matchingRole.targetRate === undefined) return workbookDefault;
   const configuredRate = matchingRole?.baselineValue;
   if (configuredRate !== undefined && configuredRate > 0) return configuredRate;
   if (matchingRole?.targetRate !== undefined && matchingRole.targetRate > 0) return matchingRole.targetRate;
@@ -264,7 +320,8 @@ function getMeasureKeysForRole(role: string, config: StpRoleMappingConfig): stri
 }
 
 export function getRoleTargetUnit(role: string): 'm3/h' | 'pallets/h' | 'OL/h' {
-  return ['cycles', 'pick'].includes(normalizeRoleKey(role)) ? 'OL/h' : 'm3/h';
+  if (normalizeRoleKey(role).includes('bayclearing')) return 'pallets/h';
+  return ['pick', 'picking', 'replens', 'replenishment'].includes(normalizeRoleKey(role)) ? 'OL/h' : 'm3/h';
 }
 
 export function aggregateScheduledHoursByWeekAndRole(files: UploadedFileRecord[]): Record<string, Record<string, number>> {
@@ -294,95 +351,70 @@ export function aggregateScheduledHoursByWeekAndRole(files: UploadedFileRecord[]
   return weeklySchedule;
 }
 
-export function buildStpDemandPlan(files: UploadedFileRecord[], config: StpRoleMappingConfig = stpRoleMappingConfig, roles: Role[] = roleDefaults, selectedWeekCodes?: string[]): StpDemandPlan {
+export function buildStpDemandPlan(files: UploadedFileRecord[], config: StpRoleMappingConfig = stpRoleMappingConfig, roles: Role[] = roleDefaults, selectedWeekCodes?: string[], resourceMapping?: Pick<import('../types').ResourceMapping, 'm3PerPallet' | 'transitBayclearingPalletsPerHour' | 'dcBayclearingPalletsPerHour'>): StpDemandPlan {
   const stpRows = files
     .filter(file => file.kind === 'stp')
     .flatMap(file => file.records);
-
-  const roleDemand = new Map<string, { volume: number; weekCode?: string; forecastFlag?: string }>();
-  const missingMappings: MissingStpMappingError[] = [];
-
   const selected = selectedWeekCodes?.length ? new Set(selectedWeekCodes) : undefined;
-
-  const preferredStpRows = new Map<string, typeof stpRows[number]>();
+  const preferredRows = new Map<string, typeof stpRows[number]>();
+  const missingMappings: MissingStpMappingError[] = [];
   for (const row of stpRows) {
-    const rawRole = summaryRoleName(String(row.role ?? ''));
-    if (!rawRole) {
-      continue;
-    }
-
-    if (rawRole === '__TOTAL_HANDLING_QUEUE_CORRECTED__') {
-      continue;
-    }
-
-    const mappedRole = resolveConfigRoleName(rawRole, config);
-    if (!config[mappedRole]) {
-      missingMappings.push({ role: mappedRole, error: 'No STP mapping' });
-      continue;
-    }
-
-    const mappedMeasureFields = config[mappedRole].map(measure => normalizeMeasure(measure));
     const rowMeasure = normalizeMeasure(String(row.dcsummarymeasures ?? row.measure ?? row['DC_Summary_Measures'] ?? ''));
-    const rowMatchesConfiguredMeasure = mappedMeasureFields.includes(rowMeasure) || mappedMeasureFields.length === 0;
-
-    if (!rowMatchesConfiguredMeasure) {
-      continue;
-    }
-
-    const volume = toNumber(row.volume ?? row.m3 ?? row.m2 ?? row.actualVolume ?? 0);
-    if (volume <= 0) {
-      continue;
-    }
-
+    const volume = measureVolume(row);
+    if (!rowMeasure || volume <= 0) continue;
     const weekCode = String(row.weekCode ?? row.week ?? '');
     if (selected && (!weekCode || !selected.has(weekCode))) continue;
-    const rowKey = `${mappedRole}|${normalizeMeasure(String(row.measure ?? row.dcsummarymeasures ?? row['DC_Summary_Measures'] ?? ''))}|${weekCode}`;
-    const currentRow = preferredStpRows.get(rowKey);
+    const rowKey = `${rowMeasure}|${weekCode}`;
+    const currentRow = preferredRows.get(rowKey);
     const isForecast = String(row.forecastFlag ?? '').toLowerCase().includes('fc') || String(row.forecastFlag ?? '').toLowerCase().includes('forecast');
     const currentIsForecast = String(currentRow?.forecastFlag ?? '').toLowerCase().includes('fc') || String(currentRow?.forecastFlag ?? '').toLowerCase().includes('forecast');
-    if (!currentRow || (isForecast && !currentIsForecast)) preferredStpRows.set(rowKey, row);
+    if (!currentRow || (isForecast && !currentIsForecast)) preferredRows.set(rowKey, row);
   }
 
-  for (const row of preferredStpRows.values()) {
-    const rawRole = summaryRoleName(String(row.role ?? ''));
-    const mappedRole = resolveConfigRoleName(rawRole, config);
-    if (!rawRole || rawRole === '__TOTAL_HANDLING_QUEUE_CORRECTED__' || !config[mappedRole]) continue;
-    const volume = toNumber(row.volume ?? row.m3 ?? row.m2 ?? row.actualVolume ?? 0);
-    if (volume <= 0) continue;
-    const weekCode = String(row.weekCode ?? row.week ?? '');
-    const aggregateRole = aggregateDemandRole(mappedRole);
-    const volumeShare = supportRoleDemandWeight(mappedRole);
-    const weightedVolume = volume * volumeShare;
-    const current = roleDemand.get(aggregateRole);
-    roleDemand.set(aggregateRole, {
-      volume: (current?.volume ?? 0) + weightedVolume,
-      weekCode: current?.weekCode ?? weekCode,
-      forecastFlag: current?.forecastFlag ?? String(row.forecastFlag ?? '')
-    });
-  }
-
-  const pickDemand = roleDemand.get('Pick');
-  if (pickDemand && config.Replens?.length === 0) {
-    const replensRole = roles.find(role => normalizeRoleKey(role.role) === 'replens');
-    roleDemand.set('Replens', {
-      volume: pickDemand.volume * (replensRole?.demandPercent ?? 0.37),
-      weekCode: pickDemand.weekCode,
-      forecastFlag: pickDemand.forecastFlag
-    });
+  const roleDemand = new Map<string, { volume: number; requiredHours: number; flow: 'Inbound' | 'Outbound'; targetUnit: 'm3/h' | 'pallets/h' | 'OL/h'; weekCode?: string; forecastFlag?: string }>();
+  const configuredTasks = stpDemandTasks.filter(task => (config[task.role] ?? []).some(measure => normalizeMeasure(measure) === normalizeMeasure(task.measure)));
+  for (const task of configuredTasks) {
+    const measureKey = normalizeMeasure(task.measure);
+    for (const [key, row] of preferredRows) {
+      if (!key.startsWith(`${measureKey}|`)) continue;
+      const rawRole = summaryRoleName(String(row.role ?? ''));
+      if (rawRole.startsWith('No mapping:')) missingMappings.push({ role: rawRole.replace(/^No mapping:\s*/i, ''), error: 'No STP mapping' });
+      const weekCode = String(row.weekCode ?? row.week ?? '');
+      const aggregateRole = aggregateDemandRole(task.role);
+      const current = roleDemand.get(aggregateRole);
+      const configuredRole = lookupRole(task.role, roles);
+      const share = task.role === 'Replens' ? configuredRole?.demandPercent ?? task.share : task.share;
+      const sourceVolume = measureVolume(row) * share;
+      const targetUnit = task.targetUnit ?? getRoleTargetUnit(task.role);
+      const volume = task.rateSetting
+        ? sourceVolume / Math.max(resourceMapping?.m3PerPallet ?? 0.82, 0.01)
+        : sourceVolume;
+      const targetRate = task.rateSetting
+        ? resourceMapping?.[task.rateSetting] ?? (task.rateSetting === 'transitBayclearingPalletsPerHour' ? 37 : 35)
+        : getRoleTargetRate(task.role, roles);
+      const requiredHours = volume / Math.max(targetRate, 0.01);
+      roleDemand.set(aggregateRole, {
+        volume: (current?.volume ?? 0) + volume,
+        requiredHours: (current?.requiredHours ?? 0) + requiredHours,
+        flow: task.flow,
+        targetUnit,
+        weekCode: current?.weekCode ?? weekCode,
+        forecastFlag: current?.forecastFlag ?? String(row.forecastFlag ?? '')
+      });
+    }
   }
 
   const roleDemandRows: StpDemandRoleRow[] = [];
   for (const [role, demand] of roleDemand.entries()) {
     const volume = demand.volume;
-    const targetRate = getRoleTargetRate(role, roles);
-    const requiredHours = Math.max(volume / Math.max(targetRate, 0.01), 0);
-
-    roleDemandRows.push({ role, volume, targetRate, targetUnit: getRoleTargetUnit(role), requiredHours, weekCode: demand.weekCode, forecastFlag: demand.forecastFlag, mappingStatus: 'Mapped' });
+    const requiredHours = Math.max(demand.requiredHours, 0);
+    const targetRate = volume / Math.max(requiredHours, 0.01);
+    roleDemandRows.push({ role, flow: demand.flow, volume, targetRate, targetUnit: demand.targetUnit, requiredHours, weekCode: demand.weekCode, forecastFlag: demand.forecastFlag, mappingStatus: 'Mapped' });
   }
 
   return {
     roleDemandRows,
     scheduledByWeekAndRole: aggregateScheduledHoursByWeekAndRole(files),
-    missingMappings: missingMappings.length ? missingMappings : undefined
+    missingMappings: missingMappings.length ? Array.from(new Map(missingMappings.map(item => [item.role, item])).values()) : undefined
   };
 }

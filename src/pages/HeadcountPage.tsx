@@ -41,7 +41,7 @@ export default function HeadcountPage() {
   const uploadedMtp = mtpUpload ? recordsToMtp(mtpUpload.records) : [];
   const sourceRows = uploadedMtp.length ? uploadedMtp : defaultMtpMonths;
   const stpWeekCodes = Array.from({ length: 8 }, (_, index) => `2026${String(36 + index).padStart(2, '0')}`);
-  const stpOperationalHours = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, stpWeekCodes).roleDemandRows
+  const stpOperationalHours = buildStpDemandPlan(uploadedFiles, stpRoleMappingConfig, roles, stpWeekCodes, resourceMapping).roleDemandRows
     .reduce((total, row) => total + row.requiredHours, 0);
   const averageStpMonthlyHours = stpOperationalHours / stpWeekCodes.length * 4.33;
   const rows = sourceRows.map(source => {
